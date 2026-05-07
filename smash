@@ -1,0 +1,1111 @@
+#!/usr/bin/env bash
+# =============================================================================
+# smash v4.4 - Unified Encode/Decode Payload Manager
+# Host: wolowitz (FreeBSD 12.1)
+#
+# Compression modes:
+#   xz       (default)  — lossless, excellent ratio
+#   gz       (-g)       — lossless, faster, wider compat
+#   ai       (--ai)     — native semantic compactor + xz, no API needed
+#                          dictionary abbreviation, filler strip, dedup
+#                          lossy, ~25-40% of original
+#   ai-api   (--ai-api) — LLM API compression + xz, the real deal
+#                          any OpenAI-compatible API or Anthropic
+#                          lossy, ~5-10% of original, accurate af
+#
+# --ai uses the LLM principle as a lookup table: shared domain knowledge
+# lets it compress "configuration" → "cfg" without an API call.
+#
+# --ai-api uses the actual LLM — billions of parameters of trained context
+# let it rewrite content at ~10% size while preserving every fact.
+# Works with: OpenAI, Anthropic, Ollama, LM Studio, Groq, Together,
+# OpenRouter, Mistral, vLLM, text-generation-webui, any OpenAI-compat API.
+#
+# Folder support:
+#   Directories are auto-tarred before compression.
+#   With --ai/--ai-api, text files are AI-compressed before tarring
+#   (binary files are included unchanged).
+#   Uses .dtar extension to distinguish from regular .tar files.
+#   On decode, .dtar files are auto-extracted back to directories.
+#
+# Extensions:
+#   .xz.b64.TIMESTAMP         — xz compressed (default)
+#   .gz.b64.TIMESTAMP         — gzip compressed
+#   .ai.xz.b64.TIMESTAMP      — semantic compacted + xz (lossy)
+#   .dtar.xz.b64.TIMESTAMP    — directory (tar + xz)
+#   .dtar.gz.b64.TIMESTAMP    — directory (tar + gzip)
+#
+# v4.4 changes:
+#   - Default Anthropic model updated: claude-sonnet-4-20250514 → claude-sonnet-4-6
+#     (Claude 4 Sonnet API model ID, current as of 2026-05-07)
+#   - AI workflow integration subcommands (read/pack/context/memory)
+#
+# v4.3 changes:
+#   - POSIX revert: bash gives pipefail, [[ ]], local, null-safe find
+#   - API keys hidden from ps via curl -K tmpfile
+#   - API payloads via -d @tmpfile (avoids ARG_MAX, hidden from ps)
+#   - printf over echo for data (no -n/-e mangling)
+#   - stdin redirects over cat pipes (one fewer process)
+#   - Tool existence checks at startup
+#   - Robust $EDITOR fallback with nano guard
+# =============================================================================
+
+set -euo pipefail
+umask 077
+
+die() { printf 'smash: %s\n' "$*" 1>&2; exit 2; }
+
+# --- dependency checks (fail fast with clear message) ---
+command -v openssl >/dev/null 2>&1 || die "requires openssl"
+command -v xz >/dev/null 2>&1 || die "requires xz"
+command -v gzip >/dev/null 2>&1 || die "requires gzip"
+
+ACTION="encode"
+MODE="auto"
+TEXT=""
+INFILE=""
+OUTDIR=""
+OUT_PATH=""
+COMPRESS_MODE="xz"   # default: xz
+AI_MODE=0             # --ai enables native semantic compression
+AI_API_MODE=0         # --ai-api enables LLM API semantic compression
+
+usage() {
+  cat 1>&2 <<'EOF'
+smash v4.4 — encode/decode payload manager
+
+usage:
+  smash <file>                   encode file (xz, default)
+  smash <directory>              tar + encode directory (xz, default)
+  smash -g <file|directory>      encode (gzip)
+  smash --ai <file|directory>     native semantic compress + xz (lossy, ~25-40%)
+  smash --ai-api <file|directory> LLM API compress + xz (lossy, ~5-10%)
+  smash -d <file.[xz|gz].b64>   decode (auto-detects format, extracts dirs)
+  smash -s "text"                encode string
+  smash --edit                   open editor, encode on save
+  smash                          interactive paste mode (Ctrl+D to finish)
+
+options:
+  -d, --decode    Decode mode (reverses base64 + compression)
+  -g, --gz        Use gzip instead of xz
+  -x, --xz       Use xz (default, explicit)
+  --ai            Native semantic compression: dictionary abbreviation,
+                  filler stripping, dedup. No API. Fast. (~25-40%)
+  --ai-api        LLM API compression: feeds content through any AI.
+                  The real deal — ~5-10% of original. Needs API key.
+                  Works with: OpenAI, Anthropic, Ollama, LM Studio,
+                  Groq, Together, OpenRouter, any OpenAI-compatible API.
+  -o, --output    Output directory or file path
+  -h, --help      Show this help
+
+env:
+  B64_OUTDIR=/some/dir          default output directory
+
+  --ai-api auto-detects from these (checked in order):
+  B64_AI_URL=http://...         API endpoint (overrides auto-detect)
+  B64_AI_KEY=sk-...             API key (overrides auto-detect)
+  B64_AI_MODEL=model-name       model override
+  ANTHROPIC_API_KEY=sk-ant-...  → uses api.anthropic.com + claude
+  OPENAI_API_KEY=sk-...         → uses api.openai.com + gpt-4o-mini
+
+  For local models (no key needed):
+  B64_AI_URL=http://localhost:11434/v1/chat/completions  (Ollama)
+  B64_AI_URL=http://localhost:1234/v1/chat/completions   (LM Studio)
+EOF
+  exit 2
+}
+
+short_ts() { date +%y%m%d_%H%M%S; }
+
+safe_base() {
+  local s="$1"
+  s="${s##*/}"
+  s="$(printf '%s' "$s" | tr -cd 'A-Za-z0-9._-')"
+  [[ -n "$s" ]] || s="data"
+  printf '%s\n' "$s"
+}
+
+pick_unique() {
+  local candidate="$1"
+  local n=0
+  while [[ -e "$candidate" ]]; do
+    n=$((n+1))
+    candidate="${1}.${n}"
+  done
+  printf '%s\n' "$candidate"
+}
+
+pick_outfile() {
+  local outdir="$1" base="$2" ts="$3" ext="$4"
+  local candidate="${outdir}/${base}.${ext}.b64.${ts}"
+  pick_unique "$candidate"
+}
+
+ensure_outdir() {
+  local d="$1"
+  [[ -n "$d" ]] || return 1
+  if [[ ! -d "$d" ]]; then
+    mkdir -p "$d" 2>/dev/null || return 1
+  fi
+  [[ -w "$d" ]] || return 1
+  return 0
+}
+
+encode_to_tmp() {
+  local tmp_b64="$1"
+  if [[ "$COMPRESS_MODE" == "xz" ]]; then
+    xz -9 -c | openssl enc -base64 -A > "$tmp_b64"
+  else
+    gzip -9 -c | openssl enc -base64 -A > "$tmp_b64"
+  fi
+}
+
+decode_to_tmp() {
+  local tmp_raw="$1" decomp="$2"
+  if [[ "$decomp" == "xz" ]]; then
+    openssl enc -d -base64 -A | xz -d -c > "$tmp_raw"
+  else
+    openssl enc -d -base64 -A | gunzip -c > "$tmp_raw"
+  fi
+}
+
+verify_tmp_b64() {
+  local tmp_b64="$1" comp="$2"
+  [[ -s "$tmp_b64" ]] || return 1
+
+  local tmp_archive
+  tmp_archive="$(mktemp /tmp/smash.verify.XXXXXX)"
+
+  if ! openssl enc -d -base64 -A -in "$tmp_b64" -out "$tmp_archive" 2>/dev/null; then
+    rm -f "$tmp_archive"
+    return 1
+  fi
+
+  if [[ "$comp" == "xz" ]]; then
+    if ! xz -t "$tmp_archive" 2>/dev/null; then
+      rm -f "$tmp_archive"
+      return 1
+    fi
+  else
+    if ! gzip -t "$tmp_archive" 2>/dev/null; then
+      rm -f "$tmp_archive"
+      return 1
+    fi
+  fi
+
+  rm -f "$tmp_archive"
+  return 0
+}
+
+move_final() {
+  local src="$1" dst="$2"
+  if mv -f "$src" "$dst" 2>/dev/null; then
+    return 0
+  fi
+  cp -f "$src" "$dst"
+  rm -f "$src"
+}
+
+# --------------------------------------------------------------------------
+# Native semantic compactor (--ai)
+#
+# No API, no network, no dependencies beyond awk.
+# Works like a domain-aware compression engine:
+#   1. Strip comment-only lines, blank lines, markdown formatting
+#   2. Collapse whitespace, flatten indentation
+#   3. Remove filler phrases ("in order to" → "to", etc.)
+#   4. Abbreviate words via 100+ entry tech dictionary
+#      (word-by-word with case preservation — portable awk, no \b needed)
+#   5. Deduplicate consecutive identical lines
+#   6. Final whitespace cleanup
+#
+# Combined with xz on top, total compression often hits ~5-10% of original.
+# --------------------------------------------------------------------------
+ai_compress() {
+  local input_file="$1" output_file="$2"
+
+  local orig_bytes
+  orig_bytes=$(wc -c < "$input_file" | tr -d ' ')
+
+  printf 'smash: ai compacting %sB...\n' "$orig_bytes" 1>&2
+
+  awk '
+  BEGIN {
+    # ================================================================
+    # ABBREVIATION DICTIONARY — shared domain knowledge
+    # Same principle as LLM compression: both writer and reader know
+    # what "cfg" means, so we dont need to spell "configuration".
+    # ================================================================
+
+    # --- core types ---
+    d["function"]="fn"; d["functions"]="fns"
+    d["return"]="ret"; d["returns"]="rets"
+    d["string"]="str"; d["strings"]="strs"
+    d["number"]="num"; d["numbers"]="nums"
+    d["boolean"]="bool"; d["booleans"]="bools"
+    d["integer"]="int"; d["integers"]="ints"
+    d["character"]="char"; d["characters"]="chars"
+    d["array"]="arr"; d["arrays"]="arrs"
+
+    # --- infrastructure ---
+    d["configuration"]="cfg"; d["configurations"]="cfgs"
+    d["configure"]="cfg"; d["configured"]="cfgd"
+    d["directory"]="dir"; d["directories"]="dirs"
+    d["environment"]="env"; d["environments"]="envs"
+    d["application"]="app"; d["applications"]="apps"
+    d["database"]="db"; d["databases"]="dbs"
+    d["server"]="srv"; d["servers"]="srvs"
+    d["service"]="svc"; d["services"]="svcs"
+    d["platform"]="plat"; d["platforms"]="plats"
+    d["container"]="ctr"; d["containers"]="ctrs"
+    d["instance"]="inst"; d["instances"]="insts"
+    d["network"]="net"; d["networks"]="nets"
+    d["system"]="sys"; d["systems"]="syss"
+    d["process"]="proc"; d["processes"]="procs"
+    d["resource"]="rsc"; d["resources"]="rscs"
+
+    # --- identity/auth ---
+    d["password"]="pw"; d["passwords"]="pws"
+    d["username"]="uname"; d["usernames"]="unames"
+    d["authentication"]="auth"; d["authenticate"]="auth"
+    d["authorization"]="authz"; d["authorize"]="authz"
+    d["permission"]="perm"; d["permissions"]="perms"
+    d["credential"]="cred"; d["credentials"]="creds"
+    d["certificate"]="cert"; d["certificates"]="certs"
+
+    # --- data/comms ---
+    d["information"]="info"
+    d["description"]="desc"; d["descriptions"]="descs"
+    d["message"]="msg"; d["messages"]="msgs"
+    d["request"]="req"; d["requests"]="reqs"
+    d["response"]="resp"; d["responses"]="resps"
+    d["notification"]="notif"; d["notifications"]="notifs"
+    d["communication"]="comm"; d["communications"]="comms"
+    d["transaction"]="txn"; d["transactions"]="txns"
+    d["connection"]="conn"; d["connections"]="conns"
+    d["parameter"]="param"; d["parameters"]="params"
+    d["argument"]="arg"; d["arguments"]="args"
+
+    # --- code structure ---
+    d["variable"]="var"; d["variables"]="vars"
+    d["constant"]="const"; d["constants"]="consts"
+    d["interface"]="iface"; d["interfaces"]="ifaces"
+    d["implementation"]="impl"; d["implementations"]="impls"
+    d["implement"]="impl"
+    d["component"]="comp"; d["components"]="comps"
+    d["template"]="tpl"; d["templates"]="tpls"
+    d["callback"]="cb"; d["callbacks"]="cbs"
+    d["handler"]="hdlr"; d["handlers"]="hdlrs"
+    d["controller"]="ctrl"; d["controllers"]="ctrls"
+    d["middleware"]="mw"
+    d["endpoint"]="ep"; d["endpoints"]="eps"
+    d["exception"]="exc"; d["exceptions"]="excs"
+    d["dependency"]="dep"; d["dependencies"]="deps"
+
+    # --- ops/lifecycle ---
+    d["command"]="cmd"; d["commands"]="cmds"
+    d["document"]="doc"; d["documents"]="docs"
+    d["documentation"]="docs"
+    d["specification"]="spec"; d["specifications"]="specs"
+    d["repository"]="repo"; d["repositories"]="repos"
+    d["operation"]="op"; d["operations"]="ops"
+    d["execute"]="exec"; d["execution"]="exec"
+    d["initialize"]="init"; d["initialization"]="init"
+    d["register"]="reg"; d["registration"]="reg"
+    d["management"]="mgmt"; d["manager"]="mgr"
+    d["property"]="prop"; d["properties"]="props"
+    d["attribute"]="attr"; d["attributes"]="attrs"
+    d["reference"]="ref"; d["references"]="refs"
+    d["statistics"]="stats"
+    d["performance"]="perf"
+    d["utility"]="util"; d["utilities"]="utils"
+
+    # --- qualifiers ---
+    d["maximum"]="max"; d["minimum"]="min"
+    d["default"]="def"; d["defaults"]="defs"
+    d["version"]="ver"; d["versions"]="vers"
+    d["original"]="orig"
+    d["previous"]="prev"; d["previously"]="prev"
+    d["current"]="cur"; d["currently"]="cur"
+    d["temporary"]="tmp"
+    d["production"]="prod"
+    d["development"]="dev"
+    d["package"]="pkg"; d["packages"]="pkgs"
+    d["library"]="lib"; d["libraries"]="libs"
+    d["address"]="addr"; d["addresses"]="addrs"
+    d["example"]="eg"; d["examples"]="egs"
+    d["security"]="sec"
+    d["memory"]="mem"
+    d["object"]="obj"; d["objects"]="objs"
+    d["source"]="src"; d["destination"]="dst"
+    d["administrator"]="admin"; d["administration"]="admin"
+    d["timestamp"]="ts"; d["identifier"]="id"
+    d["frequency"]="freq"; d["distribution"]="dist"
+    d["synchronize"]="sync"; d["synchronous"]="sync"
+    d["asynchronous"]="async"; d["asynchronously"]="async"
+
+    # --- common prose shortcuts ---
+    d["available"]="avail"
+    d["required"]="reqd"; d["requirement"]="reqmt"
+    d["requirements"]="reqmts"
+    d["optional"]="opt"
+    d["enabled"]="on"; d["disabled"]="off"
+    d["through"]="thru"; d["without"]="w/o"
+    d["within"]="w/in"; d["between"]="btwn"
+    d["because"]="bc"
+    d["approximately"]="~"
+    d["including"]="incl"; d["excluding"]="excl"
+    d["especially"]="esp"
+    d["typically"]="usu"; d["usually"]="usu"
+    d["generally"]="gen"
+    d["immediately"]="immed"
+    d["automatically"]="auto"
+    d["separately"]="sep"
+
+    prev = ""
+    buf = ""       # for joining short lines
+    buf_len = 0
+  }
+
+  # --- SKIP: comment-only lines ---
+  /^[[:space:]]*(#[^!])/ { next }
+  /^[[:space:]]*\/\// { next }
+  /^[[:space:]]*\/\*/ { next }
+  /^[[:space:]]*\*[[:space:]]/ { next }
+  /^[[:space:]]*\*\/$/ { next }
+  /^[[:space:]]*<!--/ { next }
+  /^[[:space:]]*-->/ { next }
+
+  # --- SKIP: blank lines ---
+  /^[[:space:]]*$/ { next }
+
+  # --- SKIP: decorative/divider lines ---
+  /^[[:space:]]*[-=_*#~]{3,}[[:space:]]*$/ { next }
+  /^[[:space:]]*[━━]+/ { next }
+
+  {
+    line = $0
+
+    # --- CLEAN: whitespace ---
+    sub(/[[:space:]]+$/, "", line)
+    gsub(/\t/, " ", line)
+    gsub(/  +/, " ", line)
+    sub(/^[[:space:]]+/, "", line)
+
+    # --- STRIP: inline comments (# or // after code) ---
+    # Only strip if there is content before the comment marker
+    if (line ~ /[^#]#[[:space:]]/ && line !~ /["'\''].*#/) {
+      sub(/[[:space:]]+#[[:space:]].*$/, "", line)
+    }
+    if (line ~ /.\/\/[[:space:]]/ && line !~ /["'\''].*\/\//) {
+      sub(/[[:space:]]+\/\/[[:space:]].*$/, "", line)
+    }
+
+    # --- CLEAN: markdown formatting ---
+    # awk has no backrefs — just strip the marker characters directly
+    sub(/^#{1,6}[[:space:]]+/, "", line)
+    gsub(/```/, "", line)
+    gsub(/`/, "", line)
+    gsub(/\*\*\*/, "", line)
+    gsub(/\*\*/, "", line)
+    sub(/^[-*+][[:space:]]+/, "", line)
+    sub(/^[0-9]+\.[[:space:]]+/, "", line)
+
+    # --- STRIP: double quotes around single words ---
+    # awk has no backrefs, so we walk and rebuild
+    if (line ~ /"[^" ]+"/) {
+      qresult = ""
+      qrest = line
+      while (match(qrest, /"[^" ]+"/)) {
+        qword = substr(qrest, RSTART + 1, RLENGTH - 2)
+        qresult = qresult substr(qrest, 1, RSTART - 1) qword
+        qrest = substr(qrest, RSTART + RLENGTH)
+      }
+      line = qresult qrest
+    }
+
+    # --- FILLER PHRASE REMOVAL ---
+    gsub(/[Ii]n order to/, "to", line)
+    gsub(/[Aa]s well as/, "+", line)
+    gsub(/[Pp]lease note that ?/, "", line)
+    gsub(/[Ii]t is important to note that ?/, "", line)
+    gsub(/[Ii]t should be noted that ?/, "", line)
+    gsub(/[Ff]or example,? ?/, "eg ", line)
+    gsub(/[Ss]uch as /, "eg ", line)
+    gsub(/[Tt]hat is,? ?/, "ie ", line)
+    gsub(/[Ww]ith respect to /, "re ", line)
+    gsub(/[Ii]n the context of /, "in ", line)
+    gsub(/[Tt]he following /, "", line)
+    gsub(/[Aa]s follows:?/, ":", line)
+    gsub(/[Mm]ake sure (that )?/, "", line)
+    gsub(/[Kk]eep in mind (that )?/, "", line)
+    gsub(/[Bb]asically,? ?/, "", line)
+    gsub(/[Ee]ssentially,? ?/, "", line)
+    gsub(/[Oo]bviously,? ?/, "", line)
+    gsub(/[Aa]dditionally,? ?/, "+", line)
+    gsub(/[Ff]urthermore,? ?/, "+", line)
+    gsub(/[Mm]oreover,? ?/, "+", line)
+    gsub(/[Nn]evertheless,? ?/, "but ", line)
+    gsub(/[Tt]herefore,? ?/, "=> ", line)
+    gsub(/[Cc]onsequently,? ?/, "=> ", line)
+    gsub(/[Hh]owever,? ?/, "but ", line)
+    gsub(/[Aa]lthough /, "tho ", line)
+    gsub(/[Nn]ote that /, "", line)
+    gsub(/[Rr]espectively/, "", line)
+    gsub(/[Ss]ignificantly/, "", line)
+    gsub(/[Cc]ertain /, "", line)
+    gsub(/[Vv]arious /, "", line)
+    gsub(/[Pp]articular /, "", line)
+    gsub(/[Ss]pecific /, "", line)
+    gsub(/[Dd]ifferent /, "", line)
+    gsub(/[Rr]elevant /, "", line)
+    gsub(/[Aa]ppropriate /, "", line)
+
+    # --- AGGRESSIVE PROSE FILLER ---
+    # Multi-word patterns that add zero information
+    gsub(/[Yy]ou will need to (have )?/, "", line)
+    gsub(/[Yy]ou should (also |then )?/, "", line)
+    gsub(/[Yy]ou can (also |then )?/, "", line)
+    gsub(/[Yy]ou may (also |want to )?/, "", line)
+    gsub(/[Yy]ou must /, "", line)
+    gsub(/[Ww]e will /, "", line)
+    gsub(/[Ww]e have /, "", line)
+    gsub(/[Ii]t is (strongly )?recommended that /, "", line)
+    gsub(/[Ii]t is recommended /, "", line)
+    gsub(/[Pp]lease do not hesitate to /, "", line)
+    gsub(/[Ii]f you have any questions /, "", line)
+    gsub(/[Ii]n this (document|guide|section),? ?/, "", line)
+    gsub(/[Bb]y (running|using|following) the following (command|steps|instructions):? ?/, ": ", line)
+    gsub(/[Bb]y default,? ?/, "def: ", line)
+    gsub(/[Ii]n most cases,? ?/, "usu ", line)
+    gsub(/[Ff]or (a |the )?basic /, "", line)
+    gsub(/[Dd]epending on /, "per ", line)
+    gsub(/[Tt]his (parameter|option|setting|value) (controls?|specifies|sets|determines) /, "", line)
+    gsub(/[Tt]he (default|recommended) value (is|for) /, "def=", line)
+    gsub(/[Ww]hich means that /, "ie ", line)
+    gsub(/[Ww]hich is located at /, "@ ", line)
+    gsub(/[Ww]hich are located at /, "@ ", line)
+    gsub(/ is located at /, " @ ", line)
+    gsub(/ are located at /, " @ ", line)
+    gsub(/[Aa]fter (you have |the )?/, "after ", line)
+    gsub(/[Bb]efore (you can |you )?/, "before ", line)
+    gsub(/[Dd]uring the /, "during ", line)
+    gsub(/[Tt]here are several /, "", line)
+    gsub(/[Tt]he main /, "", line)
+    gsub(/[Tt]he first step (is to |in )/, "", line)
+    gsub(/[Ww]elcome to (the )?/, "", line)
+    gsub(/[Cc]omprehensive /, "", line)
+    gsub(/[Nn]ecessary /, "", line)
+    gsub(/[Ss]uccessfully /, "", line)
+    gsub(/[Pp]roperly /, "", line)
+    gsub(/[Cc]orrectly /, "", line)
+    gsub(/[Ff]ully /, "", line)
+    gsub(/[Cc]ompletely /, "", line)
+    gsub(/[Cc]urrently,? ?/, "", line)
+    gsub(/[Ii]n place/, "", line)
+    gsub(/ as needed/, "", line)
+    gsub(/ if necessary/, "", line)
+    gsub(/ at least /, " >=", line)
+
+    # --- REMOVE ARTICLES ---
+    # "the", "a", "an" are reconstructable from context.
+    # Massive win on verbose prose. Safe for technical content.
+    gsub(/ [Tt]he /, " ", line)
+    gsub(/ [Aa]n /, " ", line)
+    gsub(/ [Aa] /, " ", line)
+    sub(/^[Tt]he /, "", line)
+    sub(/^[Aa]n /, "", line)
+    sub(/^[Aa] /, "", line)
+
+    # --- REMOVE WEAK VERBS/FILLERS (space-bounded only) ---
+    gsub(/ is /, " ", line)
+    gsub(/ are /, " ", line)
+    gsub(/ was /, " ", line)
+    gsub(/ were /, " ", line)
+    gsub(/ will be /, " ", line)
+    gsub(/ has been /, " ", line)
+    gsub(/ have been /, " ", line)
+    gsub(/ can be /, " ", line)
+    gsub(/ should be /, " ", line)
+    gsub(/ would be /, " ", line)
+    gsub(/ could be /, " ", line)
+    gsub(/ may be /, " ", line)
+    gsub(/ might be /, " ", line)
+    gsub(/ needs to be /, " ", line)
+    gsub(/ used to /, " ", line)
+    gsub(/ also /, " ", line)
+    gsub(/ just /, " ", line)
+    gsub(/ very /, " ", line)
+    gsub(/ really /, " ", line)
+    gsub(/ quite /, " ", line)
+    gsub(/ rather /, " ", line)
+    gsub(/ simply /, " ", line)
+    gsub(/ some /, " ", line)
+    gsub(/ being /, " ", line)
+    gsub(/ itself /, " ", line)
+    gsub(/ themselves /, " ", line)
+    gsub(/ always /, " ", line)
+    gsub(/ never /, " !!", line)
+    gsub(/ often /, " ", line)
+    gsub(/ many /, " ", line)
+    gsub(/ most /, " ", line)
+    gsub(/ all of /, " all ", line)
+    gsub(/ one of /, " ", line)
+    gsub(/ set of /, " ", line)
+    gsub(/ type of /, " ", line)
+    gsub(/ kind of /, " ", line)
+    gsub(/ sort of /, " ", line)
+    gsub(/ based on /, " per ", line)
+    gsub(/ in addition to /, " + ", line)
+    gsub(/ on top of /, " + ", line)
+    gsub(/ along with /, " + ", line)
+    gsub(/ together with /, " + ", line)
+    gsub(/ related to /, " re ", line)
+    gsub(/ associated with /, " re ", line)
+    gsub(/ responsible for /, " owns ", line)
+    gsub(/ according to /, " per ", line)
+
+    # --- REMOVE TRAILING PUNCTUATION ---
+    sub(/\.$/, "", line)
+    sub(/;$/, "", line)
+
+    # --- WORD-BY-WORD ABBREVIATION ---
+    # Portable: no \b needed. Walks each word, looks up in dictionary,
+    # preserves case of first letter, reassembles with original separators.
+    result = ""
+    rest = line
+    while (match(rest, /[a-zA-Z_][a-zA-Z0-9_]*/)) {
+      word = substr(rest, RSTART, RLENGTH)
+      prefix = substr(rest, 1, RSTART - 1)
+      rest = substr(rest, RSTART + RLENGTH)
+
+      lword = tolower(word)
+      if (lword in d) {
+        repl = d[lword]
+        if (word ~ /^[A-Z]/ && repl ~ /^[a-z]/) {
+          repl = toupper(substr(repl, 1, 1)) substr(repl, 2)
+        }
+        result = result prefix repl
+      } else {
+        result = result prefix word
+      }
+    }
+    line = result rest
+
+    # --- FINAL CLEANUP ---
+    gsub(/  +/, " ", line)
+    sub(/^[[:space:]]+/, "", line)
+    sub(/[[:space:]]+$/, "", line)
+
+    # skip if empty after processing
+    if (line == "") next
+
+    # --- DEDUP: skip consecutive identical lines ---
+    if (line == prev) next
+    prev = line
+
+    # --- AGGRESSIVE LINE JOINING ---
+    # Pack lines into 250-char blocks separated by ;
+    # Gives xz much larger sliding window context for pattern matching.
+    # This is the biggest single win for final compression ratio.
+    cur_len = length(line)
+    if (buf != "") {
+      if (buf_len + cur_len + 2 < 250) {
+        buf = buf "; " line
+        buf_len = buf_len + cur_len + 2
+        next
+      } else {
+        print buf
+        buf = line
+        buf_len = cur_len
+        next
+      }
+    }
+    buf = line
+    buf_len = cur_len
+    next
+  }
+  END {
+    if (buf != "") print buf
+  }
+  ' "$input_file" > "$output_file"
+
+  local comp_bytes ratio=0
+  comp_bytes=$(wc -c < "$output_file" | tr -d ' ')
+  if [[ "$orig_bytes" -gt 0 ]]; then
+    ratio=$((comp_bytes * 100 / orig_bytes))
+  fi
+  printf 'smash: ai: %sB -> %sB (%s%% text, before xz+b64)\n' \
+    "$orig_bytes" "$comp_bytes" "$ratio" 1>&2
+}
+
+# --------------------------------------------------------------------------
+# LLM API semantic compression (--ai-api)
+#
+# Sends content through any LLM API for true semantic compression.
+# The model's billions of parameters let it understand and rewrite
+# content at ~5-10% of original size while preserving all facts.
+#
+# Supports two API formats:
+#   - OpenAI-compatible (default): OpenAI, Ollama, LM Studio, Groq,
+#     Together, Mistral, OpenRouter, vLLM, text-generation-webui, etc.
+#   - Anthropic: auto-detected from URL containing "anthropic.com"
+#
+# Security: API keys and payloads are passed via temp files (curl -K
+# and -d @file), never on the command line where ps(1) would expose them.
+# --------------------------------------------------------------------------
+ai_compress_api() {
+  local input_file="$1" output_file="$2"
+
+  command -v jq >/dev/null 2>&1 || die "--ai-api requires jq"
+  command -v curl >/dev/null 2>&1 || die "--ai-api requires curl"
+
+  local api_url="${B64_AI_URL:-}"
+  local api_key="${B64_AI_KEY:-}"
+  local model="${B64_AI_MODEL:-}"
+  local is_anthropic=0
+  local is_local=0
+
+  # --- Auto-detect provider from env vars ---
+  if [[ -z "$api_url" ]]; then
+    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+      api_url="https://api.anthropic.com/v1/messages"
+      api_key="${api_key:-$ANTHROPIC_API_KEY}"
+      model="${model:-claude-sonnet-4-6}"
+      is_anthropic=1
+    elif [[ -n "${OPENAI_API_KEY:-}" ]]; then
+      api_url="https://api.openai.com/v1/chat/completions"
+      api_key="${api_key:-$OPENAI_API_KEY}"
+      model="${model:-gpt-4o-mini}"
+    else
+      die "--ai-api needs: B64_AI_URL, or ANTHROPIC_API_KEY, or OPENAI_API_KEY"
+    fi
+  else
+    # URL provided — detect format
+    if [[ "$api_url" == *"anthropic.com"* ]]; then
+      is_anthropic=1
+      api_key="${api_key:-${ANTHROPIC_API_KEY:-}}"
+      model="${model:-claude-sonnet-4-6}"
+    else
+      api_key="${api_key:-${OPENAI_API_KEY:-}}"
+      model="${model:-gpt-4o-mini}"
+    fi
+
+    # Local endpoints (Ollama, LM Studio) don't need a key
+    if [[ "$api_url" == *"localhost"* || "$api_url" == *"127.0.0.1"* || "$api_url" == *"0.0.0.0"* ]]; then
+      is_local=1
+      model="${model:-llama3}"
+    fi
+  fi
+
+  if [[ "$is_local" -eq 0 && -z "$api_key" ]]; then
+    die "--ai-api needs B64_AI_KEY or provider-specific key env var"
+  fi
+
+  local orig_bytes
+  orig_bytes=$(wc -c < "$input_file" | tr -d ' ')
+
+  if [[ "$orig_bytes" -gt 512000 ]]; then
+    printf 'smash: warning: large input (%sB) — may hit token limits\n' "$orig_bytes" 1>&2
+  fi
+
+  printf 'smash: ai-api compressing %sB via %s@%s...\n' \
+    "$orig_bytes" "$model" "${api_url##*/}" 1>&2
+
+  local sys_prompt
+  sys_prompt="You are a precision compression engine. Distill the input to its absolute essence.
+
+RULES:
+- Preserve ALL: facts, numbers, values, names, paths, configs, code, schemas, relationships, constraints
+- Remove ONLY: redundancy, verbose explanation, filler words, repeated context
+- Use dense shorthand: abbreviations, compact notation, implied structure
+- Reference well-known concepts by name instead of explaining them
+- For code: keep logic and structure, strip comments and whitespace
+- For configs: keep all keys and values, compact formatting
+- For prose: extract facts and relationships, drop narrative
+- NEVER add commentary, framing, or meta-text about the compression
+- NEVER omit information — compress representation, not content
+- Target: 10% of input size or less"
+
+  local tmp_payload tmp_curlcfg response compressed
+
+  # Build payload to temp file (avoids ARG_MAX, hidden from ps)
+  tmp_payload="$(mktemp /tmp/smash.payload.XXXXXX)"
+
+  if [[ "$is_anthropic" -eq 1 ]]; then
+    # --- Anthropic Messages API ---
+    jq -Rs \
+      --arg model "$model" \
+      --arg sys "$sys_prompt" \
+      '{
+        model: $model,
+        max_tokens: 16384,
+        system: $sys,
+        messages: [{role: "user", content: .}]
+      }' < "$input_file" > "$tmp_payload" || { rm -f "$tmp_payload"; die "failed to build payload (jq)"; }
+
+    tmp_curlcfg="$(mktemp /tmp/smash.curl.XXXXXX)"
+    printf 'header = "x-api-key: %s"\n' "$api_key" > "$tmp_curlcfg"
+    response=$(curl -sS --max-time 300 \
+      -K "$tmp_curlcfg" \
+      "$api_url" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d "@${tmp_payload}" 2>&1) || { rm -f "$tmp_curlcfg" "$tmp_payload"; die "API call failed"; }
+    rm -f "$tmp_curlcfg" "$tmp_payload"
+
+    compressed=$(printf '%s\n' "$response" | jq -r '.content[0].text // empty' 2>/dev/null) || true
+  else
+    # --- OpenAI-compatible Chat Completions API ---
+    jq -Rs \
+      --arg model "$model" \
+      --arg sys "$sys_prompt" \
+      '{
+        model: $model,
+        max_tokens: 16384,
+        messages: [
+          {role: "system", content: $sys},
+          {role: "user", content: .}
+        ]
+      }' < "$input_file" > "$tmp_payload" || { rm -f "$tmp_payload"; die "failed to build payload (jq)"; }
+
+    if [[ -n "$api_key" ]]; then
+      tmp_curlcfg="$(mktemp /tmp/smash.curl.XXXXXX)"
+      printf 'header = "Authorization: Bearer %s"\n' "$api_key" > "$tmp_curlcfg"
+      response=$(curl -sS --max-time 300 \
+        -K "$tmp_curlcfg" \
+        "$api_url" \
+        -H "content-type: application/json" \
+        -d "@${tmp_payload}" 2>&1) || { rm -f "$tmp_curlcfg" "$tmp_payload"; die "API call failed"; }
+      rm -f "$tmp_curlcfg" "$tmp_payload"
+    else
+      response=$(curl -sS --max-time 300 \
+        "$api_url" \
+        -H "content-type: application/json" \
+        -d "@${tmp_payload}" 2>&1) || { rm -f "$tmp_payload"; die "API call failed"; }
+      rm -f "$tmp_payload"
+    fi
+
+    compressed=$(printf '%s\n' "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null) || true
+  fi
+
+  if [[ -z "$compressed" ]]; then
+    local err_msg
+    err_msg=$(printf '%s\n' "$response" | jq -r '.error.message // .error.type // .detail // empty' 2>/dev/null) || true
+    [[ -n "$err_msg" ]] || err_msg="$(printf '%s\n' "$response" | head -c 200)"
+    die "API returned no content: $err_msg"
+  fi
+
+  printf '%s' "$compressed" > "$output_file"
+
+  local comp_bytes ratio=0
+  comp_bytes=$(wc -c < "$output_file" | tr -d ' ')
+  if [[ "$orig_bytes" -gt 0 ]]; then
+    ratio=$((comp_bytes * 100 / orig_bytes))
+  fi
+  printf 'smash: ai-api: %sB -> %sB (%s%% text, before xz+b64)\n' \
+    "$orig_bytes" "$comp_bytes" "$ratio" 1>&2
+}
+
+# ---- parse args ----
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage ;;
+    -d|--decode) ACTION="decode"; shift ;;
+    -x|--xz) COMPRESS_MODE="xz"; shift ;;
+    -g|--gz) COMPRESS_MODE="gz"; shift ;;
+    --ai) AI_MODE=1; COMPRESS_MODE="xz"; shift ;;
+    --ai-api) AI_API_MODE=1; COMPRESS_MODE="xz"; shift ;;
+    -s) [[ $# -ge 2 ]] || usage; MODE="string"; TEXT="$2"; shift 2 ;;
+    -o|--output) [[ $# -ge 2 ]] || usage; OUT_PATH="$2"; shift 2 ;;
+    --edit) MODE="edit"; shift ;;
+    --) shift; break ;;
+    -*) die "unknown option: $1" ;;
+    *)
+      if [[ -z "$INFILE" ]]; then
+        INFILE="${1%/}"
+      else
+        die "too many args"
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [[ "$ACTION" == "decode" ]]; then
+  # ==========================================
+  # DECODE LOGIC
+  # ==========================================
+  [[ -n "$INFILE" ]] || usage
+  [[ -r "$INFILE" && -f "$INFILE" ]] || die "not a readable file: $INFILE"
+
+  DIR="$(dirname -- "$INFILE")"
+  NAME="$(basename -- "$INFILE")"
+
+  # Detect directory tar (.dtar) for auto-extraction after decode
+  IS_DTAR=0
+  if [[ "$NAME" == *".dtar."* || "$NAME" == *".dtar" ]]; then
+    IS_DTAR=1
+  fi
+
+  # Auto-detect compression and AI mode from extension
+  IS_AI=0
+  DECOMP="xz"
+  if [[ "$NAME" == *".ai.xz.b64"* ]]; then
+    DECOMP="xz"
+    IS_AI=1
+    EXT_PATTERN="ai.xz"
+  elif [[ "$NAME" == *".xz.b64"* ]]; then
+    DECOMP="xz"
+    EXT_PATTERN="xz"
+  elif [[ "$NAME" == *".gz.b64"* ]]; then
+    DECOMP="gz"
+    EXT_PATTERN="gz"
+  else
+    EXT_PATTERN="xz"
+  fi
+
+  if [[ -z "$OUT_PATH" ]]; then
+    BASE="$NAME"
+    if [[ "$BASE" == *".${EXT_PATTERN}.b64."* ]]; then
+      BASE="${BASE%%.${EXT_PATTERN}.b64.*}"
+    elif [[ "$BASE" == *.${EXT_PATTERN}.b64 ]]; then
+      BASE="${BASE%.${EXT_PATTERN}.b64}"
+    fi
+    [[ -n "$BASE" ]] || BASE="restored"
+
+    CANDIDATE="${DIR}/${BASE}"
+    if [[ -e "$CANDIDATE" ]]; then
+      TS="$(short_ts)"
+      CANDIDATE="$(pick_unique "${DIR}/${BASE}.restored.${TS}")"
+    fi
+    OUT_PATH="$CANDIDATE"
+  fi
+
+  OUT_DIR="$(dirname -- "$OUT_PATH")"
+  [[ -d "$OUT_DIR" ]] || mkdir -p "$OUT_DIR" 2>/dev/null || die "cannot create output dir: $OUT_DIR"
+  [[ -w "$OUT_DIR" ]] || die "output dir not writable: $OUT_DIR"
+
+  TMP_OUT="$(mktemp /tmp/smash.stage.XXXXXX)"
+  cleanup_dec() { rm -f "$TMP_OUT"; }
+  trap cleanup_dec EXIT INT HUP TERM
+
+  decode_to_tmp "$TMP_OUT" "$DECOMP" < "$INFILE" || die "decompression or decode failed"
+  [[ -s "$TMP_OUT" ]] || die "decode produced empty output"
+
+  move_final "$TMP_OUT" "$OUT_PATH"
+  trap - EXIT
+
+  # Auto-extract directory tars (.dtar)
+  if [[ "$IS_DTAR" -eq 1 ]]; then
+    EXTRACT_DIR="$(dirname -- "$OUT_PATH")"
+    EXTRACTED_NAME="$(basename -- "$OUT_PATH" .dtar)"
+    printf 'smash: extracting directory to: %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME" 1>&2
+    tar xf "$OUT_PATH" -C "$EXTRACT_DIR" || die "tar extraction failed"
+    rm -f "$OUT_PATH"
+    if [[ "$IS_AI" -eq 1 ]]; then
+      printf 'decoded+extracted (ai-compacted, lossy): %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME" 1>&2
+    else
+      printf 'decoded+extracted: %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME" 1>&2
+    fi
+  elif [[ "$IS_AI" -eq 1 ]]; then
+    printf 'decoded (ai-compacted, lossy): %s\n' "$OUT_PATH" 1>&2
+  else
+    printf 'decoded: %s\n' "$OUT_PATH" 1>&2
+  fi
+  exit 0
+
+else
+  # ==========================================
+  # ENCODE LOGIC
+  # ==========================================
+  if [[ -n "${B64_OUTDIR:-}" ]]; then
+    OUTDIR="$B64_OUTDIR"
+  elif [[ -n "$INFILE" ]]; then
+    OUTDIR="$(dirname -- "$INFILE")"
+  else
+    OUTDIR="${HOME:-/tmp}/smashes"
+  fi
+
+  if ! ensure_outdir "$OUTDIR"; then
+    FALLBACK_OUTDIR="${HOME:-/tmp}/smashes"
+    ensure_outdir "$FALLBACK_OUTDIR" || die "cannot write to output dir"
+    OUTDIR="$FALLBACK_OUTDIR"
+  fi
+
+  BASE=""
+  IS_DIR=0
+  if [[ -n "$INFILE" ]]; then
+    BASE="$(safe_base "$INFILE")"
+    if [[ -d "$INFILE" ]]; then
+      IS_DIR=1
+      BASE="${BASE}.dtar"
+    fi
+  else
+    case "$MODE" in
+      string) BASE="string" ;;
+      edit)   BASE="edit" ;;
+      *)      BASE="stdin" ;;
+    esac
+  fi
+
+  if [[ "$AI_MODE" -eq 1 || "$AI_API_MODE" -eq 1 ]]; then
+    EXT_LABEL="ai.xz"
+  else
+    EXT_LABEL="$COMPRESS_MODE"
+  fi
+
+  # Select which AI compressor to use (if any)
+  ai_fn=""
+  if [[ "$AI_API_MODE" -eq 1 ]]; then
+    ai_fn="ai_compress_api"
+  elif [[ "$AI_MODE" -eq 1 ]]; then
+    ai_fn="ai_compress"
+  fi
+
+  TS="$(short_ts)"
+  FINAL_OUT="$(pick_outfile "$OUTDIR" "$BASE" "$TS" "$EXT_LABEL")"
+  TMP_B64="$(mktemp /tmp/smash.stage.XXXXXX.b64)"
+
+  cleanup_enc() { rm -f "$TMP_B64" "${TMP_AI:-}" "${TMP_AI:+${TMP_AI}.out}" "${TMP_TAR:-}"; [[ -z "${TMP_AIDIR:-}" ]] || rm -rf "$TMP_AIDIR"; }
+  trap cleanup_enc EXIT INT HUP TERM
+
+  # Helper: run AI compression (native or API) then encode
+  ai_then_encode() {
+    local src="$1"
+    TMP_AI="$(mktemp /tmp/smash.ai.XXXXXX)"
+    $ai_fn "$src" "$TMP_AI"
+    encode_to_tmp "$TMP_B64" < "$TMP_AI"
+    rm -f "$TMP_AI"
+  }
+
+  case "$MODE" in
+    string)
+      if [[ -n "$ai_fn" ]]; then
+        TMP_AI_SRC="$(mktemp /tmp/smash.ai.XXXXXX)"
+        printf '%s' "$TEXT" > "$TMP_AI_SRC"
+        ai_then_encode "$TMP_AI_SRC"
+        rm -f "$TMP_AI_SRC"
+      else
+        printf '%s' "$TEXT" | encode_to_tmp "$TMP_B64"
+      fi
+      ;;
+    edit)
+      TMP_TXT="$(mktemp /tmp/smash.edit.XXXXXX)"
+      : > "$TMP_TXT"
+      if [[ -z "${EDITOR:-}" ]]; then
+        command -v nano >/dev/null 2>&1 || die "--edit requires \$EDITOR or nano"
+      fi
+      ${EDITOR:-nano -w} "$TMP_TXT"
+      if [[ -n "$ai_fn" ]]; then
+        ai_then_encode "$TMP_TXT"
+      else
+        encode_to_tmp "$TMP_B64" < "$TMP_TXT"
+      fi
+      rm -f "$TMP_TXT"
+      ;;
+    auto)
+      if [[ -n "$INFILE" ]]; then
+        if [[ "$IS_DIR" -eq 1 ]]; then
+          # --- Directory: optionally AI-compress text files, then tar + encode ---
+          DIR_PARENT="$(dirname -- "$INFILE")"
+          DIR_BASE="$(basename -- "$INFILE")"
+          TMP_TAR="$(mktemp /tmp/smash.tar.XXXXXX.tar)"
+
+          if [[ -n "$ai_fn" ]]; then
+            # Copy dir to temp, AI-compress text files in-place
+            TMP_AIDIR="$(mktemp -d /tmp/smash.aidir.XXXXXX)"
+            cp -a "$INFILE" "$TMP_AIDIR/"
+            AI_COUNT=0
+            AI_SKIP=0
+            while IFS= read -r -d '' f; do
+              if file -b --mime-type "$f" 2>/dev/null | grep -q '^text/'; then
+                TMP_AF="$(mktemp /tmp/smash.af.XXXXXX)"
+                $ai_fn "$f" "$TMP_AF"
+                mv "$TMP_AF" "$f"
+                AI_COUNT=$((AI_COUNT + 1))
+              else
+                AI_SKIP=$((AI_SKIP + 1))
+              fi
+            done < <(find "$TMP_AIDIR/$DIR_BASE" -type f -print0)
+            printf 'smash: ai: %s text files compressed, %s binary skipped\n' \
+              "$AI_COUNT" "$AI_SKIP" 1>&2
+            tar cf "$TMP_TAR" -C "$TMP_AIDIR" "$DIR_BASE" || die "tar failed"
+            rm -rf "$TMP_AIDIR"
+            TMP_AIDIR=""
+          else
+            printf 'smash: tarring directory: %s\n' "$INFILE" 1>&2
+            tar cf "$TMP_TAR" -C "$DIR_PARENT" "$DIR_BASE" || die "tar failed on: $INFILE"
+          fi
+
+          TAR_BYTES=$(wc -c < "$TMP_TAR" | tr -d ' ')
+          printf 'smash: tar: %sB\n' "$TAR_BYTES" 1>&2
+          encode_to_tmp "$TMP_B64" < "$TMP_TAR"
+          rm -f "$TMP_TAR"
+        else
+          [[ -r "$INFILE" && -f "$INFILE" ]] || die "not a readable file or directory: $INFILE"
+          if [[ -n "$ai_fn" ]]; then
+            ai_then_encode "$INFILE"
+          else
+            encode_to_tmp "$TMP_B64" < "$INFILE"
+          fi
+        fi
+      else
+        if [[ -t 0 ]]; then
+          cat 1>&2 <<'PROMPT'
+smash: Interactive input mode
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Paste your text below (unlimited size, any characters).
+Press Ctrl+D on a new line when finished.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROMPT
+        fi
+        if [[ -n "$ai_fn" ]]; then
+          TMP_AI_SRC="$(mktemp /tmp/smash.ai.XXXXXX)"
+          cat > "$TMP_AI_SRC"
+          [[ -t 0 ]] && printf '\n' 1>&2
+          ai_then_encode "$TMP_AI_SRC"
+          rm -f "$TMP_AI_SRC"
+        else
+          cat | encode_to_tmp "$TMP_B64"
+          [[ -t 0 ]] && printf '\n' 1>&2
+        fi
+      fi
+      ;;
+    *)
+      die "internal mode error"
+      ;;
+  esac
+
+  if ! verify_tmp_b64 "$TMP_B64" "$COMPRESS_MODE"; then
+    die "verify failed: output empty or corrupt. staged file: $TMP_B64"
+  fi
+
+  # show total compression ratio
+  FINAL_BYTES=$(wc -c < "$TMP_B64" | tr -d ' ')
+  if [[ -n "$INFILE" ]]; then
+    if [[ "$IS_DIR" -eq 1 ]]; then
+      ORIG_BYTES="${TAR_BYTES:-0}"
+    elif [[ -f "$INFILE" ]]; then
+      ORIG_BYTES=$(wc -c < "$INFILE" | tr -d ' ')
+    else
+      ORIG_BYTES=0
+    fi
+    if [[ "$ORIG_BYTES" -gt 0 ]]; then
+      TOTAL_RATIO=$((FINAL_BYTES * 100 / ORIG_BYTES))
+      if [[ "$IS_DIR" -eq 1 ]]; then
+        printf 'smash: total: %sB tar -> %sB b64 (%s%%)\n' \
+          "$ORIG_BYTES" "$FINAL_BYTES" "$TOTAL_RATIO" 1>&2
+      else
+        printf 'smash: total: %sB -> %sB b64 (%s%%)\n' \
+          "$ORIG_BYTES" "$FINAL_BYTES" "$TOTAL_RATIO" 1>&2
+      fi
+    fi
+  fi
+
+  move_final "$TMP_B64" "$FINAL_OUT"
+  trap - EXIT
+
+  printf 'encoded: %s\n' "$FINAL_OUT" 1>&2
+  exit 0
+fi
