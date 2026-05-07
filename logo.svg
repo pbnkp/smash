@@ -1,48 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
-  <!-- Background -->
-  <rect width="400" height="400" rx="32" fill="#0f172a"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500">
+  <defs>
+    <!-- Face: bright center, deep edges — gives it density and weight -->
+    <radialGradient id="face" cx="42%" cy="36%" r="64%">
+      <stop offset="0%" stop-color="#f0abfc"/>
+      <stop offset="55%" stop-color="#d946ef"/>
+      <stop offset="100%" stop-color="#5b0f6e"/>
+    </radialGradient>
+  </defs>
 
-  <!-- Speed lines — trail left of character -->
-  <line x1="16" y1="164" x2="72" y2="164" stroke="#22d3ee" stroke-width="5" stroke-linecap="round" opacity="0.4"/>
-  <line x1="10" y1="186" x2="70" y2="186" stroke="#22d3ee" stroke-width="8" stroke-linecap="round" opacity="0.7"/>
-  <line x1="16" y1="208" x2="72" y2="208" stroke="#22d3ee" stroke-width="5" stroke-linecap="round" opacity="0.4"/>
+  <rect width="500" height="500" fill="#000000"/>
 
-  <!-- Character body — squished ellipse (compression metaphor) -->
-  <ellipse cx="236" cy="186" rx="148" ry="128" fill="#22d3ee"/>
-  <!-- Inner face -->
-  <ellipse cx="236" cy="186" rx="128" ry="108" fill="#0f172a"/>
+  <!-- speed trail — same hue as face, fading out left -->
+  <line x1="18" y1="226" x2="90" y2="226" stroke="#d946ef" stroke-width="5"  stroke-linecap="round" opacity="0.30"/>
+  <line x1="10" y1="252" x2="88" y2="252" stroke="#d946ef" stroke-width="9"  stroke-linecap="round" opacity="0.65"/>
+  <line x1="18" y1="278" x2="90" y2="278" stroke="#d946ef" stroke-width="5"  stroke-linecap="round" opacity="0.30"/>
 
-  <!-- GLASSES -->
-  <!-- Left lens -->
-  <circle cx="192" cy="164" r="38" fill="none" stroke="#22d3ee" stroke-width="4"/>
-  <!-- Right lens -->
-  <circle cx="276" cy="164" r="38" fill="none" stroke="#22d3ee" stroke-width="4"/>
-  <!-- Bridge -->
-  <line x1="230" y1="164" x2="238" y2="164" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/>
-  <!-- Left temple -->
-  <line x1="154" y1="157" x2="140" y2="151" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/>
-  <!-- Right temple -->
-  <line x1="314" y1="157" x2="330" y2="151" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/>
+  <!-- CHARACTER — leaning into motion, face wider than tall (it's been compressed) -->
+  <g transform="translate(278 252) rotate(-7)">
 
-  <!-- LEFT EYE — wink (sarcastic squint) -->
-  <path d="M170 164 Q192 150 214 164" stroke="#22d3ee" stroke-width="5" stroke-linecap="round"/>
-  <!-- Eyelashes -->
-  <line x1="179" y1="160" x2="176" y2="148" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
-  <line x1="192" y1="154" x2="192" y2="142" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
-  <line x1="205" y1="159" x2="208" y2="148" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+    <!-- face body -->
+    <ellipse cx="0" cy="0" rx="178" ry="130" fill="url(#face)"/>
 
-  <!-- RIGHT EYE — open, sharp, knowing -->
-  <circle cx="276" cy="164" r="18" fill="#22d3ee"/>
-  <circle cx="271" cy="160" r="7" fill="#0f172a"/>
-  <!-- Gleam -->
-  <circle cx="282" cy="155" r="4" fill="white" opacity="0.85"/>
+    <!-- WINK (our right) — cubic bezier lids, looks like a real closed eye -->
+    <path d="M40 -30 C62 -56 98 -56 120 -30"
+          stroke="#000" stroke-width="10" stroke-linecap="round" fill="none"/>
+    <path d="M44 -26 C64 -14 96 -14 116 -26"
+          stroke="#000" stroke-width="5"  stroke-linecap="round" fill="none" opacity="0.38"/>
 
-  <!-- RIGHT EYEBROW — arched high (sarcastic raise) -->
-  <path d="M252 131 Q276 118 300 128" stroke="#22d3ee" stroke-width="5" stroke-linecap="round"/>
+    <!-- OPEN EYE (our left) — knowing, unblinking -->
+    <ellipse cx="-75" cy="-22" rx="46" ry="34" fill="#000"/>
+    <circle  cx="-75" cy="-22" r="20"           fill="#22d3ee"/>
+    <circle  cx="-70" cy="-27" r="10"           fill="#000"/>
+    <circle  cx="-60" cy="-34" r="5"            fill="white" opacity="0.95"/>
+    <circle  cx="-81" cy="-16" r="2.5"          fill="white" opacity="0.45"/>
 
-  <!-- SMIRK — asymmetric, pulled up on right -->
-  <path d="M188 233 Q222 254 270 244" stroke="#22d3ee" stroke-width="6" stroke-linecap="round"/>
+    <!-- EYEBROW — outer end yanked up, full sarcastic contempt -->
+    <path d="M-118 -72 C-96 -104 -58 -102 -36 -88"
+          stroke="#000" stroke-width="13" stroke-linecap="round" fill="none"/>
 
-  <!-- Wordmark -->
-  <text x="236" y="364" font-family="'Courier New', 'SF Mono', monospace" font-size="48" font-weight="700" fill="#22d3ee" text-anchor="middle" letter-spacing="8">smash</text>
+    <!-- SMIRK — one corner barely up, that's all it needs -->
+    <path d="M-65 72 C-28 96 20 98 62 84"
+          stroke="#000" stroke-width="10" stroke-linecap="round" fill="none"/>
+
+  </g>
 </svg>
