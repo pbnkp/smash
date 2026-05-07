@@ -1,69 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500">
   <defs>
-    <!-- comet trail: transparent left → gold right -->
-    <linearGradient id="trail" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%"   stop-color="#f59e0b" stop-opacity="0"/>
-      <stop offset="60%"  stop-color="#f59e0b" stop-opacity="0.25"/>
-      <stop offset="100%" stop-color="#f59e0b" stop-opacity="1"/>
-    </linearGradient>
-    <linearGradient id="trail2" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%"   stop-color="#fde68a" stop-opacity="0"/>
-      <stop offset="75%"  stop-color="#fde68a" stop-opacity="0.12"/>
-      <stop offset="100%" stop-color="#fde68a" stop-opacity="0.5"/>
-    </linearGradient>
-    <!-- head core: white-hot center, amber fade -->
-    <radialGradient id="core" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#ffffff"/>
-      <stop offset="25%"  stop-color="#fef3c7"/>
-      <stop offset="60%"  stop-color="#f59e0b"/>
-      <stop offset="100%" stop-color="#d97706" stop-opacity="0"/>
+    <!-- the screen glow — cold blue, the only light in the room -->
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#e0f2fe" stop-opacity="1"/>
+      <stop offset="18%"  stop-color="#38bdf8" stop-opacity="0.95"/>
+      <stop offset="50%"  stop-color="#0369a1" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
     </radialGradient>
-    <!-- outer glow -->
-    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
-      <feGaussianBlur stdDeviation="18" result="b"/>
+    <!-- speed trail gradient -->
+    <linearGradient id="trail" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#38bdf8" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.6"/>
+    </linearGradient>
+    <filter id="bloom" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="22" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
-    <filter id="softglow" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="8" result="b"/>
+    <filter id="crisp" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
   </defs>
 
+  <!-- the room: pure black -->
   <rect width="500" height="500" fill="#000000"/>
 
-  <!-- stars -->
-  <circle cx="72"  cy="88"  r="1.5" fill="white" opacity="0.6"/>
-  <circle cx="148" cy="48"  r="1"   fill="white" opacity="0.4"/>
-  <circle cx="312" cy="62"  r="1.5" fill="white" opacity="0.5"/>
-  <circle cx="438" cy="110" r="1"   fill="white" opacity="0.35"/>
-  <circle cx="55"  cy="390" r="1"   fill="white" opacity="0.3"/>
-  <circle cx="460" cy="340" r="1.5" fill="white" opacity="0.4"/>
-  <circle cx="200" cy="438" r="1"   fill="white" opacity="0.3"/>
+  <!-- speed — moving right, trail fades in from left -->
+  <line x1="0"  y1="238" x2="155" y2="242" stroke="url(#trail)" stroke-width="3" stroke-linecap="round"/>
+  <line x1="0"  y1="250" x2="158" y2="250" stroke="url(#trail)" stroke-width="5" stroke-linecap="round"/>
+  <line x1="0"  y1="262" x2="155" y2="258" stroke="url(#trail)" stroke-width="3" stroke-linecap="round"/>
 
-  <!-- main trail body -->
-  <path d="M 28 218 C 100 230 220 242 370 250
-           L 370 252 C 220 258 100 270 28 282 Z"
-        fill="url(#trail)"/>
-
-  <!-- upper speed streak — thinner, offset -->
-  <path d="M 55 204 C 140 214 268 228 370 234"
-        stroke="url(#trail2)" stroke-width="8" stroke-linecap="round" fill="none"/>
-
-  <!-- lower speed streak -->
-  <path d="M 55 296 C 140 286 268 272 370 266"
-        stroke="url(#trail2)" stroke-width="8" stroke-linecap="round" fill="none"/>
-
-  <!-- ambient halo — the sky lit up by the approach -->
-  <g filter="url(#glow)">
-    <circle cx="400" cy="250" r="48" fill="#f59e0b" opacity="0.35"/>
+  <!-- the bloom — light spilling out before you even see the source -->
+  <g filter="url(#bloom)">
+    <circle cx="290" cy="250" r="80" fill="#0369a1" opacity="0.5"/>
   </g>
 
-  <!-- comet head — bright, dense, inevitable -->
-  <g filter="url(#softglow)">
-    <circle cx="400" cy="250" r="52" fill="url(#core)"/>
+  <!-- the source — compressed, dense, the only thing that matters -->
+  <g filter="url(#crisp)">
+    <circle cx="290" cy="250" r="88" fill="url(#glow)"/>
   </g>
 
-  <!-- white-hot center -->
-  <circle cx="400" cy="250" r="18" fill="white"/>
+  <!-- the hard center — white hot, no blur, this is the work -->
+  <circle cx="290" cy="250" r="26" fill="white"/>
+  <circle cx="290" cy="250" r="16" fill="#e0f2fe"/>
 
 </svg>
