@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.svg" width="180" alt="smash logo"/>
+</p>
+
 # smash
 
 **Unified encode/decode payload manager with AI semantic compression.**
@@ -22,6 +26,13 @@ This is not a new idea in information theory. It is a practical implementation o
 
 ## Installation
 
+**Homebrew (macOS / Linux):**
+```bash
+brew tap pbnkp/smash
+brew install smash
+```
+
+**One-liner:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pbnkp/smash/main/install.sh | bash
 ```
