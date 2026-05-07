@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none">
+  <!-- Background -->
+  <rect width="400" height="400" rx="32" fill="#0f172a"/>
+
+  <!-- Speed lines — trail left of character -->
+  <line x1="16" y1="164" x2="72" y2="164" stroke="#22d3ee" stroke-width="5" stroke-linecap="round" opacity="0.4"/>
+  <line x1="10" y1="186" x2="70" y2="186" stroke="#22d3ee" stroke-width="8" stroke-linecap="round" opacity="0.7"/>
+  <line x1="16" y1="208" x2="72" y2="208" stroke="#22d3ee" stroke-width="5" stroke-linecap="round" opacity="0.4"/>
+
+  <!-- Character body — squished ellipse (compression metaphor) -->
+  <ellipse cx="236" cy="186" rx="148" ry="128" fill="#22d3ee"/>
+  <!-- Inner face -->
+  <ellipse cx="236" cy="186" rx="128" ry="108" fill="#0f172a"/>
+
+  <!-- GLASSES -->
+  <!-- Left lens -->
+  <circle cx="192" cy="164" r="38" fill="none" stroke="#22d3ee" stroke-width="4"/>
+  <!-- Right lens -->
+  <circle cx="276" cy="164" r="38" fill="none" stroke="#22d3ee" stroke-width="4"/>
+  <!-- Bridge -->
+  <line x1="230" y1="164" x2="238" y2="164" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/>
+  <!-- Left temple -->
+  <line x1="154" y1="157" x2="140" y2="151" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/>
+  <!-- Right temple -->
+  <line x1="314" y1="157" x2="330" y2="151" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- LEFT EYE — wink (sarcastic squint) -->
+  <path d="M170 164 Q192 150 214 164" stroke="#22d3ee" stroke-width="5" stroke-linecap="round"/>
+  <!-- Eyelashes -->
+  <line x1="179" y1="160" x2="176" y2="148" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+  <line x1="192" y1="154" x2="192" y2="142" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+  <line x1="205" y1="159" x2="208" y2="148" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- RIGHT EYE — open, sharp, knowing -->
+  <circle cx="276" cy="164" r="18" fill="#22d3ee"/>
+  <circle cx="271" cy="160" r="7" fill="#0f172a"/>
+  <!-- Gleam -->
+  <circle cx="282" cy="155" r="4" fill="white" opacity="0.85"/>
+
+  <!-- RIGHT EYEBROW — arched high (sarcastic raise) -->
+  <path d="M252 131 Q276 118 300 128" stroke="#22d3ee" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- SMIRK — asymmetric, pulled up on right -->
+  <path d="M188 233 Q222 254 270 244" stroke="#22d3ee" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Wordmark -->
+  <text x="236" y="364" font-family="'Courier New', 'SF Mono', monospace" font-size="48" font-weight="700" fill="#22d3ee" text-anchor="middle" letter-spacing="8">smash</text>
+</svg>
