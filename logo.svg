@@ -1,61 +1,69 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500">
   <defs>
-    <radialGradient id="iris" cx="38%" cy="32%" r="70%">
-      <stop offset="0%"   stop-color="#fef3c7"/>
-      <stop offset="42%"  stop-color="#f59e0b"/>
-      <stop offset="100%" stop-color="#78350f"/>
+    <!-- comet trail: transparent left → gold right -->
+    <linearGradient id="trail" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#f59e0b" stop-opacity="0"/>
+      <stop offset="60%"  stop-color="#f59e0b" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="1"/>
+    </linearGradient>
+    <linearGradient id="trail2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#fde68a" stop-opacity="0"/>
+      <stop offset="75%"  stop-color="#fde68a" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#fde68a" stop-opacity="0.5"/>
+    </linearGradient>
+    <!-- head core: white-hot center, amber fade -->
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#ffffff"/>
+      <stop offset="25%"  stop-color="#fef3c7"/>
+      <stop offset="60%"  stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="disc" cx="50%" cy="36%" r="60%">
-      <stop offset="0%"   stop-color="#1e1b4b"/>
-      <stop offset="100%" stop-color="#000005"/>
-    </radialGradient>
-    <!-- eye glow — the hero of the whole mark -->
-    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="10" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+    <!-- outer glow -->
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="18" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softglow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="8" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
   </defs>
 
   <rect width="500" height="500" fill="#000000"/>
 
-  <!-- speed — rightward motion, amber trail left -->
-  <line x1="0"  y1="252" x2="46" y2="252" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" opacity="0.20"/>
-  <line x1="0"  y1="268" x2="52" y2="268" stroke="#f59e0b" stroke-width="6" stroke-linecap="round" opacity="0.50"/>
-  <line x1="0"  y1="284" x2="46" y2="284" stroke="#f59e0b" stroke-width="3" stroke-linecap="round" opacity="0.20"/>
+  <!-- stars -->
+  <circle cx="72"  cy="88"  r="1.5" fill="white" opacity="0.6"/>
+  <circle cx="148" cy="48"  r="1"   fill="white" opacity="0.4"/>
+  <circle cx="312" cy="62"  r="1.5" fill="white" opacity="0.5"/>
+  <circle cx="438" cy="110" r="1"   fill="white" opacity="0.35"/>
+  <circle cx="55"  cy="390" r="1"   fill="white" opacity="0.3"/>
+  <circle cx="460" cy="340" r="1.5" fill="white" opacity="0.4"/>
+  <circle cx="200" cy="438" r="1"   fill="white" opacity="0.3"/>
 
-  <!-- facial disc — deep indigo fading to black at edges -->
-  <ellipse cx="250" cy="272" rx="192" ry="204" fill="url(#disc)"/>
+  <!-- main trail body -->
+  <path d="M 28 218 C 100 230 220 242 370 250
+           L 370 252 C 220 258 100 270 28 282 Z"
+        fill="url(#trail)"/>
 
-  <!-- ear tufts — angular, not fluffy -->
-  <path d="M148 136 L166 74 L210 138Z" fill="#0f0a2e"/>
-  <path d="M352 136 L334 74 L290 138Z" fill="#0f0a2e"/>
+  <!-- upper speed streak — thinner, offset -->
+  <path d="M 55 204 C 140 214 268 228 370 234"
+        stroke="url(#trail2)" stroke-width="8" stroke-linecap="round" fill="none"/>
 
-  <!-- brow ridge — amber like the eyes, slight center raise = permanent "really?" -->
-  <path d="M156 210 L186 198 L250 193 L314 198 L344 210"
-        stroke="#f59e0b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- lower speed streak -->
+  <path d="M 55 296 C 140 286 268 272 370 266"
+        stroke="url(#trail2)" stroke-width="8" stroke-linecap="round" fill="none"/>
 
-  <!-- LEFT EYE -->
+  <!-- ambient halo — the sky lit up by the approach -->
   <g filter="url(#glow)">
-    <circle cx="190" cy="268" r="54" fill="#000000"/>
-    <circle cx="190" cy="268" r="41" fill="url(#iris)"/>
-    <ellipse cx="190" cy="268" rx="15" ry="20" fill="#000000"/>
-    <circle  cx="200" cy="255" r="7"  fill="white" opacity="0.95"/>
-    <circle  cx="181" cy="277" r="3"  fill="white" opacity="0.30"/>
+    <circle cx="400" cy="250" r="48" fill="#f59e0b" opacity="0.35"/>
   </g>
 
-  <!-- RIGHT EYE -->
-  <g filter="url(#glow)">
-    <circle cx="310" cy="268" r="54" fill="#000000"/>
-    <circle cx="310" cy="268" r="41" fill="url(#iris)"/>
-    <ellipse cx="310" cy="268" rx="15" ry="20" fill="#000000"/>
-    <circle  cx="320" cy="255" r="7"  fill="white" opacity="0.95"/>
-    <circle  cx="301" cy="277" r="3"  fill="white" opacity="0.30"/>
+  <!-- comet head — bright, dense, inevitable -->
+  <g filter="url(#softglow)">
+    <circle cx="400" cy="250" r="52" fill="url(#core)"/>
   </g>
 
-  <!-- beak — sharp, authoritative, warm -->
-  <path d="M235 322 L250 348 L265 322 Q250 314 235 322Z" fill="#92400e"/>
+  <!-- white-hot center -->
+  <circle cx="400" cy="250" r="18" fill="white"/>
 
 </svg>
