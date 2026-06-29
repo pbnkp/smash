@@ -4,6 +4,42 @@ All notable changes to smash are documented here.
 
 ---
 
+## v4.5 — 2026-06-29
+
+### Fixed
+- **`smash --edit` no longer crashes with "command nano -w not found".** The
+  editor default `"${EDITOR:-nano -w}"` collapsed into a single quoted word, so
+  the shell looked for a program literally named `nano -w`. The editor is now
+  resolved into a bash array: `$VISUAL`/`$EDITOR` are honored (multi-word safe,
+  e.g. `code --wait`) and, if unset, smash falls back through
+  `nano → pico → vi → vim` (passing `-w` only to nano).
+
+### Added
+- **`-z` / `--zstd`** — opt-in zstd compression mode (`.zst.b64`). Decode
+  auto-detects it. Fast and modern; needs `zstd` installed on both ends.
+- **`--level N`** — compression level override (xz/gz `1-9`, zstd `1-19`).
+- **`--threads N`** — xz/zstd thread count (default `0` = all cores).
+- **`-q` / `--quiet`** — suppress progress output (errors still print).
+
+### Speed
+- **xz multithreading** (`-T0`, all cores) on encode, probed once at startup and
+  auto-omitted on hosts whose `xz` predates `-T`. Large wins on big inputs,
+  no-op on small ones. Decode/verify already handle threaded streams.
+- **`pigz`** used automatically for `-g`/gzip mode when installed (output is
+  standard gzip; `gunzip` reads it).
+
+### Security
+- **Temp files honor `$TMPDIR`** (per-user, mode-700 on macOS) instead of
+  world-writable `/tmp`; falls back to `/tmp` only when `$TMPDIR` is unset.
+- **`.dtar` extraction rejects path traversal** — archive members with absolute
+  paths or `..` components are refused before `tar x` runs (payloads can be
+  untrusted).
+- **API-key temp files are registered with the cleanup trap**, so an interrupt
+  mid-request can't leave the `curl` auth config (containing the key) behind in
+  the temp dir.
+
+---
+
 ## v4.4 — 2026-05-07
 
 ### Changed
