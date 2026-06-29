@@ -259,7 +259,7 @@ smash
 ## Platform Notes
 
 - **FreeBSD:** Change shebang line from `#!/usr/bin/env bash` to `#!/usr/local/bin/bash`. The tool was originally developed on FreeBSD 12.1 (wolowitz).
-- **macOS:** Works with the system bash (3.2) — the full test matrix (all modes, `--edit`, options, decode) passes under `/bin/bash` 3.2. No `brew install bash` required.
+- **macOS:** Works with the system bash (3.2) — the full test matrix (encode/decode for xz·gz·zstd·dir, `--edit`, options) passes under `/bin/bash` 3.2; the `--ai-api` code path is exercised under 3.2 too, sans the live LLM call. No `brew install bash` required.
 - **Linux:** No changes needed.
 
 ---
