@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smash v4.4 - Unified Encode/Decode Payload Manager
-# Host: wolowitz (FreeBSD 12.1)
+# smash v4.5 - Unified Encode/Decode Payload Manager
+# Host: dual — bernie (FreeBSD 12.1) + Mac (darwin). bash 3.2-safe.
 #
 # Compression modes:
 #   xz       (default)  — lossless, excellent ratio
@@ -35,10 +35,26 @@
 #   .dtar.xz.b64.TIMESTAMP    — directory (tar + xz)
 #   .dtar.gz.b64.TIMESTAMP    — directory (tar + gzip)
 #
+# v4.5 changes:
+#   - FIX: `smash --edit` no longer dies "command nano -w not found".
+#     Editor is resolved into a bash array (multi-word $EDITOR/$VISUAL safe,
+#     e.g. "code --wait") with a real fallback chain: nano→pico→vi→vim.
+#   - SPEED: xz multithreading (-T0, all cores) on encode. Probed once at
+#     startup; auto-omitted if the host's xz is too old. Big win on large
+#     inputs, no-op on small ones. Decode/verify already handle threaded streams.
+#   - HARDENING: temp files honor $TMPDIR (per-user, mode-700 on macOS) instead
+#     of world-writable /tmp; falls back to /tmp only when $TMPDIR is unset.
+#   - HARDENING: .dtar decode rejects archive members with absolute or `..`
+#     traversal paths before extracting (payloads can be untrusted).
+#   - SSOT: ~/.local/bin/smash is now a symlink → ~/bin/smash (was a divergent
+#     copy; the stale ~/bin v4.2 was shadowing this one in PATH — the actual
+#     cause of the persistent nano bug).
+#
 # v4.4 changes:
 #   - Default Anthropic model updated: claude-sonnet-4-20250514 → claude-sonnet-4-6
 #     (Claude 4 Sonnet API model ID, current as of 2026-05-07)
-#   - AI workflow integration subcommands (read/pack/context/memory)
+#   - boy-smash.sh AI workflow integration (read/pack/context/memory subcommands)
+#     available at ~/.claude/helpers/boy-smash.sh
 #
 # v4.3 changes:
 #   - POSIX revert: bash gives pipefail, [[ ]], local, null-safe find
@@ -60,6 +76,32 @@ command -v openssl >/dev/null 2>&1 || die "requires openssl"
 command -v xz >/dev/null 2>&1 || die "requires xz"
 command -v gzip >/dev/null 2>&1 || die "requires gzip"
 
+# --- v4.5 runtime config: temp dir, compressor capabilities, options ---
+
+# Honor $TMPDIR (per-user, mode-700 on macOS) over world-writable /tmp.
+SMASH_TMP="${TMPDIR:-/tmp}"; SMASH_TMP="${SMASH_TMP%/}"
+[[ -d "$SMASH_TMP" && -w "$SMASH_TMP" ]] || SMASH_TMP="/tmp"
+
+# xz multithreading: probe once. -T0 = all cores; auto-omitted if the host's
+# xz predates -T support so the pipeline stays valid on every host.
+XZ_T=""
+if printf '' | xz -T0 -c >/dev/null 2>&1; then XZ_T="-T0"; fi
+
+# Parallel gzip if available (drop-in; output is standard .gz that gunzip reads).
+GZ_BIN="gzip"
+command -v pigz >/dev/null 2>&1 && GZ_BIN="pigz"
+
+QUIET=0           # -q/--quiet : silence progress (errors still print)
+LEVEL=""          # --level N  : compression level override (default per-mode)
+THREADS=""        # --threads N: xz/zstd thread count (default 0 = all cores)
+
+# Global temp-path registry for the encode cleanup trap (secrets-safe).
+TMP_PAYLOAD=""
+TMP_CURLCFG=""
+
+# info(): printf-style progress to stderr, suppressed by --quiet.
+info() { if [[ "$QUIET" -eq 0 ]]; then printf "$@" 1>&2; fi; return 0; }
+
 ACTION="encode"
 MODE="auto"
 TEXT=""
@@ -72,29 +114,34 @@ AI_API_MODE=0         # --ai-api enables LLM API semantic compression
 
 usage() {
   cat 1>&2 <<'EOF'
-smash v4.4 — encode/decode payload manager
+smash v4.5 — encode/decode payload manager
 
 usage:
   smash <file>                   encode file (xz, default)
   smash <directory>              tar + encode directory (xz, default)
-  smash -g <file|directory>      encode (gzip)
+  smash -g <file|directory>      encode (gzip, or pigz if installed)
+  smash -z <file|directory>      encode (zstd, fast modern, opt-in)
   smash --ai <file|directory>     native semantic compress + xz (lossy, ~25-40%)
   smash --ai-api <file|directory> LLM API compress + xz (lossy, ~5-10%)
-  smash -d <file.[xz|gz].b64>   decode (auto-detects format, extracts dirs)
+  smash -d <file.[xz|gz|zst].b64> decode (auto-detects format, extracts dirs)
   smash -s "text"                encode string
   smash --edit                   open editor, encode on save
   smash                          interactive paste mode (Ctrl+D to finish)
 
 options:
   -d, --decode    Decode mode (reverses base64 + compression)
-  -g, --gz        Use gzip instead of xz
-  -x, --xz       Use xz (default, explicit)
+  -g, --gz        Use gzip (or pigz if installed) instead of xz
+  -z, --zstd      Use zstd instead of xz (fast; needs zstd to encode/decode)
+  -x, --xz       Use xz (default, explicit), multithreaded via -T0
   --ai            Native semantic compression: dictionary abbreviation,
                   filler stripping, dedup. No API. Fast. (~25-40%)
   --ai-api        LLM API compression: feeds content through any AI.
                   The real deal — ~5-10% of original. Needs API key.
                   Works with: OpenAI, Anthropic, Ollama, LM Studio,
                   Groq, Together, OpenRouter, any OpenAI-compatible API.
+  --level N       Compression level override (xz/gz 1-9, zstd 1-19)
+  --threads N     xz/zstd thread count (default 0 = all cores)
+  -q, --quiet     Suppress progress output (errors still print)
   -o, --output    Output directory or file path
   -h, --help      Show this help
 
@@ -153,48 +200,51 @@ ensure_outdir() {
 
 encode_to_tmp() {
   local tmp_b64="$1"
-  if [[ "$COMPRESS_MODE" == "xz" ]]; then
-    xz -9 -c | openssl enc -base64 -A > "$tmp_b64"
-  else
-    gzip -9 -c | openssl enc -base64 -A > "$tmp_b64"
-  fi
+  case "$COMPRESS_MODE" in
+    xz)
+      local xzt="$XZ_T"
+      [[ -n "$THREADS" ]] && xzt="-T$THREADS"
+      xz "-${LEVEL:-9}" $xzt -c | openssl enc -base64 -A > "$tmp_b64"
+      ;;
+    zstd)
+      zstd "-${LEVEL:-19}" "-T${THREADS:-0}" -q -c \
+        | openssl enc -base64 -A > "$tmp_b64"
+      ;;
+    *)  # gz (gzip or pigz)
+      "$GZ_BIN" "-${LEVEL:-9}" -c | openssl enc -base64 -A > "$tmp_b64"
+      ;;
+  esac
 }
 
 decode_to_tmp() {
   local tmp_raw="$1" decomp="$2"
-  if [[ "$decomp" == "xz" ]]; then
-    openssl enc -d -base64 -A | xz -d -c > "$tmp_raw"
-  else
-    openssl enc -d -base64 -A | gunzip -c > "$tmp_raw"
-  fi
+  case "$decomp" in
+    zstd) openssl enc -d -base64 -A | zstd -d -q -c > "$tmp_raw" ;;
+    gz)   openssl enc -d -base64 -A | gunzip -c   > "$tmp_raw" ;;
+    *)    openssl enc -d -base64 -A | xz -d -c    > "$tmp_raw" ;;
+  esac
 }
 
 verify_tmp_b64() {
   local tmp_b64="$1" comp="$2"
   [[ -s "$tmp_b64" ]] || return 1
 
-  local tmp_archive
-  tmp_archive="$(mktemp /tmp/smash.verify.XXXXXX)"
+  local tmp_archive rc=0
+  tmp_archive="$(mktemp "${SMASH_TMP}/smash.verify.XXXXXX")"
 
   if ! openssl enc -d -base64 -A -in "$tmp_b64" -out "$tmp_archive" 2>/dev/null; then
     rm -f "$tmp_archive"
     return 1
   fi
 
-  if [[ "$comp" == "xz" ]]; then
-    if ! xz -t "$tmp_archive" 2>/dev/null; then
-      rm -f "$tmp_archive"
-      return 1
-    fi
-  else
-    if ! gzip -t "$tmp_archive" 2>/dev/null; then
-      rm -f "$tmp_archive"
-      return 1
-    fi
-  fi
+  case "$comp" in
+    zstd) zstd -t -q "$tmp_archive" 2>/dev/null || rc=1 ;;
+    gz)   gzip -t    "$tmp_archive" 2>/dev/null || rc=1 ;;
+    *)    xz -t      "$tmp_archive" 2>/dev/null || rc=1 ;;
+  esac
 
   rm -f "$tmp_archive"
-  return 0
+  return $rc
 }
 
 move_final() {
@@ -227,7 +277,7 @@ ai_compress() {
   local orig_bytes
   orig_bytes=$(wc -c < "$input_file" | tr -d ' ')
 
-  printf 'smash: ai compacting %sB...\n' "$orig_bytes" 1>&2
+  info 'smash: ai compacting %sB...\n' "$orig_bytes"
 
   awk '
   BEGIN {
@@ -635,8 +685,8 @@ ai_compress() {
   if [[ "$orig_bytes" -gt 0 ]]; then
     ratio=$((comp_bytes * 100 / orig_bytes))
   fi
-  printf 'smash: ai: %sB -> %sB (%s%% text, before xz+b64)\n' \
-    "$orig_bytes" "$comp_bytes" "$ratio" 1>&2
+  info 'smash: ai: %sB -> %sB (%s%% text, before xz+b64)\n' \
+    "$orig_bytes" "$comp_bytes" "$ratio"
 }
 
 # --------------------------------------------------------------------------
@@ -706,11 +756,11 @@ ai_compress_api() {
   orig_bytes=$(wc -c < "$input_file" | tr -d ' ')
 
   if [[ "$orig_bytes" -gt 512000 ]]; then
-    printf 'smash: warning: large input (%sB) — may hit token limits\n' "$orig_bytes" 1>&2
+    info 'smash: warning: large input (%sB) — may hit token limits\n' "$orig_bytes"
   fi
 
-  printf 'smash: ai-api compressing %sB via %s@%s...\n' \
-    "$orig_bytes" "$model" "${api_url##*/}" 1>&2
+  info 'smash: ai-api compressing %sB via %s@%s...\n' \
+    "$orig_bytes" "$model" "${api_url##*/}"
 
   local sys_prompt
   sys_prompt="You are a precision compression engine. Distill the input to its absolute essence.
@@ -727,10 +777,10 @@ RULES:
 - NEVER omit information — compress representation, not content
 - Target: 10% of input size or less"
 
-  local tmp_payload tmp_curlcfg response compressed
+  local response compressed
 
   # Build payload to temp file (avoids ARG_MAX, hidden from ps)
-  tmp_payload="$(mktemp /tmp/smash.payload.XXXXXX)"
+  TMP_PAYLOAD="$(mktemp "${SMASH_TMP}/smash.payload.XXXXXX")"
 
   if [[ "$is_anthropic" -eq 1 ]]; then
     # --- Anthropic Messages API ---
@@ -742,17 +792,17 @@ RULES:
         max_tokens: 16384,
         system: $sys,
         messages: [{role: "user", content: .}]
-      }' < "$input_file" > "$tmp_payload" || { rm -f "$tmp_payload"; die "failed to build payload (jq)"; }
+      }' < "$input_file" > "$TMP_PAYLOAD" || { rm -f "$TMP_PAYLOAD"; die "failed to build payload (jq)"; }
 
-    tmp_curlcfg="$(mktemp /tmp/smash.curl.XXXXXX)"
-    printf 'header = "x-api-key: %s"\n' "$api_key" > "$tmp_curlcfg"
+    TMP_CURLCFG="$(mktemp "${SMASH_TMP}/smash.curl.XXXXXX")"
+    printf 'header = "x-api-key: %s"\n' "$api_key" > "$TMP_CURLCFG"
     response=$(curl -sS --max-time 300 \
-      -K "$tmp_curlcfg" \
+      -K "$TMP_CURLCFG" \
       "$api_url" \
       -H "anthropic-version: 2023-06-01" \
       -H "content-type: application/json" \
-      -d "@${tmp_payload}" 2>&1) || { rm -f "$tmp_curlcfg" "$tmp_payload"; die "API call failed"; }
-    rm -f "$tmp_curlcfg" "$tmp_payload"
+      -d "@${TMP_PAYLOAD}" 2>&1) || { rm -f "$TMP_CURLCFG" "$TMP_PAYLOAD"; die "API call failed"; }
+    rm -f "$TMP_CURLCFG" "$TMP_PAYLOAD"
 
     compressed=$(printf '%s\n' "$response" | jq -r '.content[0].text // empty' 2>/dev/null) || true
   else
@@ -767,23 +817,23 @@ RULES:
           {role: "system", content: $sys},
           {role: "user", content: .}
         ]
-      }' < "$input_file" > "$tmp_payload" || { rm -f "$tmp_payload"; die "failed to build payload (jq)"; }
+      }' < "$input_file" > "$TMP_PAYLOAD" || { rm -f "$TMP_PAYLOAD"; die "failed to build payload (jq)"; }
 
     if [[ -n "$api_key" ]]; then
-      tmp_curlcfg="$(mktemp /tmp/smash.curl.XXXXXX)"
-      printf 'header = "Authorization: Bearer %s"\n' "$api_key" > "$tmp_curlcfg"
+      TMP_CURLCFG="$(mktemp "${SMASH_TMP}/smash.curl.XXXXXX")"
+      printf 'header = "Authorization: Bearer %s"\n' "$api_key" > "$TMP_CURLCFG"
       response=$(curl -sS --max-time 300 \
-        -K "$tmp_curlcfg" \
+        -K "$TMP_CURLCFG" \
         "$api_url" \
         -H "content-type: application/json" \
-        -d "@${tmp_payload}" 2>&1) || { rm -f "$tmp_curlcfg" "$tmp_payload"; die "API call failed"; }
-      rm -f "$tmp_curlcfg" "$tmp_payload"
+        -d "@${TMP_PAYLOAD}" 2>&1) || { rm -f "$TMP_CURLCFG" "$TMP_PAYLOAD"; die "API call failed"; }
+      rm -f "$TMP_CURLCFG" "$TMP_PAYLOAD"
     else
       response=$(curl -sS --max-time 300 \
         "$api_url" \
         -H "content-type: application/json" \
-        -d "@${tmp_payload}" 2>&1) || { rm -f "$tmp_payload"; die "API call failed"; }
-      rm -f "$tmp_payload"
+        -d "@${TMP_PAYLOAD}" 2>&1) || { rm -f "$TMP_PAYLOAD"; die "API call failed"; }
+      rm -f "$TMP_PAYLOAD"
     fi
 
     compressed=$(printf '%s\n' "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null) || true
@@ -803,8 +853,8 @@ RULES:
   if [[ "$orig_bytes" -gt 0 ]]; then
     ratio=$((comp_bytes * 100 / orig_bytes))
   fi
-  printf 'smash: ai-api: %sB -> %sB (%s%% text, before xz+b64)\n' \
-    "$orig_bytes" "$comp_bytes" "$ratio" 1>&2
+  info 'smash: ai-api: %sB -> %sB (%s%% text, before xz+b64)\n' \
+    "$orig_bytes" "$comp_bytes" "$ratio"
 }
 
 # ---- parse args ----
@@ -814,10 +864,16 @@ while [[ $# -gt 0 ]]; do
     -d|--decode) ACTION="decode"; shift ;;
     -x|--xz) COMPRESS_MODE="xz"; shift ;;
     -g|--gz) COMPRESS_MODE="gz"; shift ;;
+    -z|--zstd|--zst)
+      command -v zstd >/dev/null 2>&1 || die "--zstd requires zstd"
+      COMPRESS_MODE="zstd"; shift ;;
     --ai) AI_MODE=1; COMPRESS_MODE="xz"; shift ;;
     --ai-api) AI_API_MODE=1; COMPRESS_MODE="xz"; shift ;;
     -s) [[ $# -ge 2 ]] || usage; MODE="string"; TEXT="$2"; shift 2 ;;
     -o|--output) [[ $# -ge 2 ]] || usage; OUT_PATH="$2"; shift 2 ;;
+    -q|--quiet) QUIET=1; shift ;;
+    --level) [[ $# -ge 2 ]] || usage; [[ "$2" =~ ^[0-9]+$ ]] || die "--level needs an integer"; LEVEL="$2"; shift 2 ;;
+    --threads) [[ $# -ge 2 ]] || usage; [[ "$2" =~ ^[0-9]+$ ]] || die "--threads needs an integer"; THREADS="$2"; shift 2 ;;
     --edit) MODE="edit"; shift ;;
     --) shift; break ;;
     -*) die "unknown option: $1" ;;
@@ -831,6 +887,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# AI modes always wrap in xz (the .ai.xz contract) regardless of -g/-z order.
+if [[ "$AI_MODE" -eq 1 || "$AI_API_MODE" -eq 1 ]]; then
+  COMPRESS_MODE="xz"
+fi
 
 if [[ "$ACTION" == "decode" ]]; then
   # ==========================================
@@ -861,9 +922,15 @@ if [[ "$ACTION" == "decode" ]]; then
   elif [[ "$NAME" == *".gz.b64"* ]]; then
     DECOMP="gz"
     EXT_PATTERN="gz"
+  elif [[ "$NAME" == *".zst.b64"* ]]; then
+    DECOMP="zstd"
+    EXT_PATTERN="zst"
   else
     EXT_PATTERN="xz"
   fi
+
+  # Fail fast if the decoder for this payload isn't installed on this host.
+  [[ "$DECOMP" != "zstd" ]] || command -v zstd >/dev/null 2>&1 || die "decoding .zst payloads requires zstd"
 
   if [[ -z "$OUT_PATH" ]]; then
     BASE="$NAME"
@@ -886,7 +953,7 @@ if [[ "$ACTION" == "decode" ]]; then
   [[ -d "$OUT_DIR" ]] || mkdir -p "$OUT_DIR" 2>/dev/null || die "cannot create output dir: $OUT_DIR"
   [[ -w "$OUT_DIR" ]] || die "output dir not writable: $OUT_DIR"
 
-  TMP_OUT="$(mktemp /tmp/smash.stage.XXXXXX)"
+  TMP_OUT="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX")"
   cleanup_dec() { rm -f "$TMP_OUT"; }
   trap cleanup_dec EXIT INT HUP TERM
 
@@ -900,18 +967,23 @@ if [[ "$ACTION" == "decode" ]]; then
   if [[ "$IS_DTAR" -eq 1 ]]; then
     EXTRACT_DIR="$(dirname -- "$OUT_PATH")"
     EXTRACTED_NAME="$(basename -- "$OUT_PATH" .dtar)"
-    printf 'smash: extracting directory to: %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME" 1>&2
+    info 'smash: extracting directory to: %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME"
+    # Harden: payloads may be untrusted. Reject any archive member that escapes
+    # the extraction dir via an absolute path or a `..` traversal component.
+    if tar tf "$OUT_PATH" 2>/dev/null | grep -Eq '^/|(^|/)\.\.(/|$)'; then
+      die "refusing to extract: archive contains absolute or traversal paths"
+    fi
     tar xf "$OUT_PATH" -C "$EXTRACT_DIR" || die "tar extraction failed"
     rm -f "$OUT_PATH"
     if [[ "$IS_AI" -eq 1 ]]; then
-      printf 'decoded+extracted (ai-compacted, lossy): %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME" 1>&2
+      info 'decoded+extracted (ai-compacted, lossy): %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME"
     else
-      printf 'decoded+extracted: %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME" 1>&2
+      info 'decoded+extracted: %s/%s\n' "$EXTRACT_DIR" "$EXTRACTED_NAME"
     fi
   elif [[ "$IS_AI" -eq 1 ]]; then
-    printf 'decoded (ai-compacted, lossy): %s\n' "$OUT_PATH" 1>&2
+    info 'decoded (ai-compacted, lossy): %s\n' "$OUT_PATH"
   else
-    printf 'decoded: %s\n' "$OUT_PATH" 1>&2
+    info 'decoded: %s\n' "$OUT_PATH"
   fi
   exit 0
 
@@ -951,6 +1023,8 @@ else
 
   if [[ "$AI_MODE" -eq 1 || "$AI_API_MODE" -eq 1 ]]; then
     EXT_LABEL="ai.xz"
+  elif [[ "$COMPRESS_MODE" == "zstd" ]]; then
+    EXT_LABEL="zst"
   else
     EXT_LABEL="$COMPRESS_MODE"
   fi
@@ -965,15 +1039,19 @@ else
 
   TS="$(short_ts)"
   FINAL_OUT="$(pick_outfile "$OUTDIR" "$BASE" "$TS" "$EXT_LABEL")"
-  TMP_B64="$(mktemp /tmp/smash.stage.XXXXXX.b64)"
+  TMP_B64="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX.b64")"
 
-  cleanup_enc() { rm -f "$TMP_B64" "${TMP_AI:-}" "${TMP_AI:+${TMP_AI}.out}" "${TMP_TAR:-}"; [[ -z "${TMP_AIDIR:-}" ]] || rm -rf "$TMP_AIDIR"; }
+  cleanup_enc() {
+    rm -f "$TMP_B64" "${TMP_AI:-}" "${TMP_AI:+${TMP_AI}.out}" "${TMP_TAR:-}" \
+          "${TMP_AI_SRC:-}" "${TMP_AF:-}" "${TMP_PAYLOAD:-}" "${TMP_CURLCFG:-}"
+    [[ -z "${TMP_AIDIR:-}" ]] || rm -rf "$TMP_AIDIR"
+  }
   trap cleanup_enc EXIT INT HUP TERM
 
   # Helper: run AI compression (native or API) then encode
   ai_then_encode() {
     local src="$1"
-    TMP_AI="$(mktemp /tmp/smash.ai.XXXXXX)"
+    TMP_AI="$(mktemp "${SMASH_TMP}/smash.ai.XXXXXX")"
     $ai_fn "$src" "$TMP_AI"
     encode_to_tmp "$TMP_B64" < "$TMP_AI"
     rm -f "$TMP_AI"
@@ -982,7 +1060,7 @@ else
   case "$MODE" in
     string)
       if [[ -n "$ai_fn" ]]; then
-        TMP_AI_SRC="$(mktemp /tmp/smash.ai.XXXXXX)"
+        TMP_AI_SRC="$(mktemp "${SMASH_TMP}/smash.ai.XXXXXX")"
         printf '%s' "$TEXT" > "$TMP_AI_SRC"
         ai_then_encode "$TMP_AI_SRC"
         rm -f "$TMP_AI_SRC"
@@ -991,12 +1069,28 @@ else
       fi
       ;;
     edit)
-      TMP_TXT="$(mktemp /tmp/smash.edit.XXXXXX)"
+      TMP_TXT="$(mktemp "${SMASH_TMP}/smash.edit.XXXXXX")"
       : > "$TMP_TXT"
-      if [[ -z "${EDITOR:-}" ]]; then
-        command -v nano >/dev/null 2>&1 || die "--edit requires \$EDITOR or nano"
+      # Resolve an editor into an argv array. This is the v4.5 fix for
+      # "command nano -w not found": the old "${EDITOR:-nano -w}" collapsed the
+      # default to a single quoted word. $VISUAL/$EDITOR may be multi-word
+      # (e.g. "code --wait"); if neither is set, fall back through real editors.
+      ed_cmd=()
+      if [[ -n "${VISUAL:-}" ]]; then
+        read -r -a ed_cmd <<< "$VISUAL"
+      elif [[ -n "${EDITOR:-}" ]]; then
+        read -r -a ed_cmd <<< "$EDITOR"
+      else
+        for _cand in nano pico vi vim; do
+          if command -v "$_cand" >/dev/null 2>&1; then
+            if [[ "$_cand" == "nano" ]]; then ed_cmd=(nano -w); else ed_cmd=("$_cand"); fi
+            break
+          fi
+        done
       fi
-      ${EDITOR:-nano -w} "$TMP_TXT"
+      [[ ${#ed_cmd[@]} -gt 0 ]] || die "--edit needs a working \$EDITOR/\$VISUAL or one of: nano pico vi vim"
+      command -v "${ed_cmd[0]}" >/dev/null 2>&1 || die "editor not found in PATH: ${ed_cmd[0]}"
+      "${ed_cmd[@]}" "$TMP_TXT"
       if [[ -n "$ai_fn" ]]; then
         ai_then_encode "$TMP_TXT"
       else
@@ -1010,17 +1104,17 @@ else
           # --- Directory: optionally AI-compress text files, then tar + encode ---
           DIR_PARENT="$(dirname -- "$INFILE")"
           DIR_BASE="$(basename -- "$INFILE")"
-          TMP_TAR="$(mktemp /tmp/smash.tar.XXXXXX.tar)"
+          TMP_TAR="$(mktemp "${SMASH_TMP}/smash.tar.XXXXXX.tar")"
 
           if [[ -n "$ai_fn" ]]; then
             # Copy dir to temp, AI-compress text files in-place
-            TMP_AIDIR="$(mktemp -d /tmp/smash.aidir.XXXXXX)"
+            TMP_AIDIR="$(mktemp -d "${SMASH_TMP}/smash.aidir.XXXXXX")"
             cp -a "$INFILE" "$TMP_AIDIR/"
             AI_COUNT=0
             AI_SKIP=0
             while IFS= read -r -d '' f; do
               if file -b --mime-type "$f" 2>/dev/null | grep -q '^text/'; then
-                TMP_AF="$(mktemp /tmp/smash.af.XXXXXX)"
+                TMP_AF="$(mktemp "${SMASH_TMP}/smash.af.XXXXXX")"
                 $ai_fn "$f" "$TMP_AF"
                 mv "$TMP_AF" "$f"
                 AI_COUNT=$((AI_COUNT + 1))
@@ -1028,18 +1122,18 @@ else
                 AI_SKIP=$((AI_SKIP + 1))
               fi
             done < <(find "$TMP_AIDIR/$DIR_BASE" -type f -print0)
-            printf 'smash: ai: %s text files compressed, %s binary skipped\n' \
-              "$AI_COUNT" "$AI_SKIP" 1>&2
+            info 'smash: ai: %s text files compressed, %s binary skipped\n' \
+              "$AI_COUNT" "$AI_SKIP"
             tar cf "$TMP_TAR" -C "$TMP_AIDIR" "$DIR_BASE" || die "tar failed"
             rm -rf "$TMP_AIDIR"
             TMP_AIDIR=""
           else
-            printf 'smash: tarring directory: %s\n' "$INFILE" 1>&2
+            info 'smash: tarring directory: %s\n' "$INFILE"
             tar cf "$TMP_TAR" -C "$DIR_PARENT" "$DIR_BASE" || die "tar failed on: $INFILE"
           fi
 
           TAR_BYTES=$(wc -c < "$TMP_TAR" | tr -d ' ')
-          printf 'smash: tar: %sB\n' "$TAR_BYTES" 1>&2
+          info 'smash: tar: %sB\n' "$TAR_BYTES"
           encode_to_tmp "$TMP_B64" < "$TMP_TAR"
           rm -f "$TMP_TAR"
         else
@@ -1061,7 +1155,7 @@ Press Ctrl+D on a new line when finished.
 PROMPT
         fi
         if [[ -n "$ai_fn" ]]; then
-          TMP_AI_SRC="$(mktemp /tmp/smash.ai.XXXXXX)"
+          TMP_AI_SRC="$(mktemp "${SMASH_TMP}/smash.ai.XXXXXX")"
           cat > "$TMP_AI_SRC"
           [[ -t 0 ]] && printf '\n' 1>&2
           ai_then_encode "$TMP_AI_SRC"
@@ -1094,11 +1188,11 @@ PROMPT
     if [[ "$ORIG_BYTES" -gt 0 ]]; then
       TOTAL_RATIO=$((FINAL_BYTES * 100 / ORIG_BYTES))
       if [[ "$IS_DIR" -eq 1 ]]; then
-        printf 'smash: total: %sB tar -> %sB b64 (%s%%)\n' \
-          "$ORIG_BYTES" "$FINAL_BYTES" "$TOTAL_RATIO" 1>&2
+        info 'smash: total: %sB tar -> %sB b64 (%s%%)\n' \
+          "$ORIG_BYTES" "$FINAL_BYTES" "$TOTAL_RATIO"
       else
-        printf 'smash: total: %sB -> %sB b64 (%s%%)\n' \
-          "$ORIG_BYTES" "$FINAL_BYTES" "$TOTAL_RATIO" 1>&2
+        info 'smash: total: %sB -> %sB b64 (%s%%)\n' \
+          "$ORIG_BYTES" "$FINAL_BYTES" "$TOTAL_RATIO"
       fi
     fi
   fi
@@ -1106,6 +1200,6 @@ PROMPT
   move_final "$TMP_B64" "$FINAL_OUT"
   trap - EXIT
 
-  printf 'encoded: %s\n' "$FINAL_OUT" 1>&2
+  info 'encoded: %s\n' "$FINAL_OUT"
   exit 0
 fi

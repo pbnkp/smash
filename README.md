@@ -45,12 +45,13 @@ chmod +x ~/.local/bin/smash
 ```
 
 **Requirements:**
-- bash 4+ (or `/usr/local/bin/bash` on FreeBSD)
-- `xz` (lossless mode)
-- `gzip` (gz mode)
+- bash 3.2+ (works with macOS system bash; `/usr/local/bin/bash` on FreeBSD)
+- `xz` (lossless default; uses `-T0` multithreading when available)
+- `gzip` (gz mode; `pigz` used automatically if installed)
 - `openssl` (base64 encoding)
 - `awk` (ai mode — stdlib, always present)
 - `jq` + `curl` (ai-api mode only)
+- `zstd` (only for `-z`/`--zstd` mode — opt-in)
 
 ---
 
@@ -59,12 +60,13 @@ chmod +x ~/.local/bin/smash
 ```bash
 smash <file>                    # encode file (xz + base64, lossless default)
 smash <directory>               # auto-tar + encode directory
-smash -g <file|dir>             # encode with gzip instead of xz
+smash -g <file|dir>             # encode with gzip (or pigz) instead of xz
+smash -z <file|dir>             # encode with zstd (fast modern, opt-in)
 smash --ai <file|dir>           # native semantic compress + xz  (~25-40%)
 smash --ai-api <file|dir>       # LLM API compress + xz          (~5-10%)
-smash -d <file.xz.b64.*>        # decode (format auto-detected)
+smash -d <file.[xz|gz|zst].b64.*>  # decode (format auto-detected)
 smash -s "text string"          # encode a string directly
-smash --edit                    # open $EDITOR, encode on save
+smash --edit                    # open $VISUAL/$EDITOR, encode on save
 smash                           # interactive paste mode (Ctrl+D to finish)
 ```
 
@@ -72,14 +74,18 @@ smash                           # interactive paste mode (Ctrl+D to finish)
 
 | Flag | Description |
 |---|---|
-| `-d`, `--decode` | Decode mode. Reverses base64 + decompression. Auto-detects xz/gz/ai. |
-| `-g`, `--gz` | Use gzip instead of xz (faster, wider compat, slightly worse ratio) |
-| `-x`, `--xz` | Use xz (default, explicit) |
+| `-d`, `--decode` | Decode mode. Reverses base64 + decompression. Auto-detects xz/gz/zst/ai. |
+| `-g`, `--gz` | Use gzip instead of xz (faster, wider compat; uses `pigz` if installed) |
+| `-z`, `--zstd` | Use zstd instead of xz (fast, modern; needs `zstd` to encode and decode) |
+| `-x`, `--xz` | Use xz (default, explicit; multithreaded via `-T0`) |
 | `--ai` | Native semantic compression. No API. Fast. ~25-40% of input. |
 | `--ai-api` | LLM API compression. Needs API key. ~5-10% of input. |
+| `--level N` | Compression level override (xz/gz `1-9`, zstd `1-19`) |
+| `--threads N` | xz/zstd thread count (default `0` = all cores) |
+| `-q`, `--quiet` | Suppress progress output (errors still print) |
 | `-s "text"` | Encode a string instead of a file |
 | `-o`, `--output` | Output path (decode mode) or output directory (encode mode) |
-| `--edit` | Open `$EDITOR`, encode when you save and exit |
+| `--edit` | Open `$VISUAL`/`$EDITOR` (multi-word safe); falls back nano→pico→vi→vim |
 
 ---
 
@@ -93,6 +99,7 @@ Encoded files are named by convention:
 Examples:
   config.json.xz.b64.260507_143022        # lossless xz
   config.json.gz.b64.260507_143022        # lossless gzip
+  config.json.zst.b64.260507_143022       # lossless zstd
   notes.txt.ai.xz.b64.260507_143022      # AI semantic + xz
   project.dtar.xz.b64.260507_143022      # directory (tar + xz)
 ```
@@ -252,7 +259,7 @@ smash
 ## Platform Notes
 
 - **FreeBSD:** Change shebang line from `#!/usr/bin/env bash` to `#!/usr/local/bin/bash`. The tool was originally developed on FreeBSD 12.1 (wolowitz).
-- **macOS:** Works with system bash (3.x) in basic modes; bash 4+ required for full `[[ ]]` and `local` semantics. Install via `brew install bash` if needed.
+- **macOS:** Works with the system bash (3.2) — the full test matrix (all modes, `--edit`, options, decode) passes under `/bin/bash` 3.2. No `brew install bash` required.
 - **Linux:** No changes needed.
 
 ---
