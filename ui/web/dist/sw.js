@@ -6,7 +6,7 @@
    served. Offline use cannot be silently tampered. */
 "use strict";
 var CACHE = "smash-v5.0-37601aef";
-var INTEGRITY = {"index.html": "a4d0ae3f444d000345e10177b091929d0fcead62011fe9c44b9a451175a0d0ae", "app.min.js": "37601aefa8cd357a1f8e4e8c945a5c15b9e3b94fb4c8b176b5793e2705ecc17f", "manifest.webmanifest": "8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4", "icon.svg": "e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39"};
+var INTEGRITY = {"index.html": "97cc42286a6f652d90b832fec124c218ed575b883af98c445da616e7a7bb5518", "app.min.js": "37601aefa8cd357a1f8e4e8c945a5c15b9e3b94fb4c8b176b5793e2705ecc17f", "manifest.webmanifest": "8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4", "icon.svg": "e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39"};
 
 function hex(buf) {
   var v = new Uint8Array(buf), s = "", i;
