@@ -71,9 +71,20 @@ root.innerHTML=
 +"<p class=note>Everything runs on this device. Nothing is uploaded. gzip artifacts interop with the smash CLI; xz/zstd artifacts need the CLI to restore.</p>"
 +"<div id=q hidden><span id=qtxt class=mono></span><button id=cancel>CANCEL</button></div>"
 +"<section id=out aria-live=polite></section>"
-+"<footer id=seal><span class=chip>SEAL VERIFIED</span><span class=hx id=sealhx></span></footer>";
++"<footer id=seal><span class=chip id=sealchip>SEALED</span><span class=hx id=sealhx></span></footer>";
 document.body.appendChild(root);
-$("#sealhx").textContent=(window.__SMASH_PIN__||"").slice(0,16)+"…"+(window.__SMASH_PIN__||"").slice(-8);
+/* Honest seal: report the integrity mechanism that ACTUALLY ran.
+   - file:// self-verify build: the loader set __SMASH_PIN__ only after
+     hashing its own bytes → "SEAL VERIFIED" + pin.
+   - dist build over http(s): this code runs at all ONLY because the browser
+     matched app.min.js against its pinned SRI hash → "SRI ENFORCED" is a true
+     statement about why we're executing. (SW badge is appended separately.) */
+(function(){
+ var pin=window.__SMASH_PIN__||"";
+ if(pin){$("#sealchip").textContent="SEAL VERIFIED";$("#sealhx").textContent=pin.slice(0,16)+"…"+pin.slice(-8);}
+ else if(location.protocol.indexOf("http")===0){$("#sealchip").textContent="SRI ENFORCED";$("#sealhx").textContent="script ran → integrity hash matched";}
+ else{$("#sealchip").textContent="LOCAL";$("#sealhx").textContent="on-device, no integrity gate on this origin";}
+})();
 
 /* ---- helpers ---- */
 function ts(){var d=new Date,p=function(n){return (n<10?"0":"")+n};return String(d.getFullYear()).slice(2)+p(d.getMonth()+1)+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds())}

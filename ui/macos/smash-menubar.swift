@@ -137,22 +137,29 @@ final class Engine {
 }
 
 // ---------- drop view over the status button ----------
+// This ONE view owns both interactions: a click toggles the popover, a file
+// drag encodes/decodes. An earlier version returned nil from hitTest to "pass
+// clicks to the button underneath" — but hit-testing also resolves the drag
+// destination, so nil silently broke drop delivery. The correct pattern is a
+// single view that handles mouseDown (→ onClick) and performDragOperation
+// (→ onDrop); we do NOT override hitTest, so the view receives both.
 final class DropView: NSView {
     var onDrop: (([String]) -> Void)?
+    var onClick: (() -> Void)?
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
     }
     required init?(coder: NSCoder) { nil }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
         if urls.isEmpty { return false }
         onDrop?(urls.map { $0.path })
         return true
     }
-    // pass clicks through to the status button underneath
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
 // ---------- app ----------
@@ -181,10 +188,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let dv = DropView(frame: b.bounds)
             dv.autoresizingMask = [.width, .height]
             dv.onDrop = { [weak self] paths in self?.handle(paths: paths) }
+            dv.onClick = { [weak self] in self?.togglePopover() }
             b.addSubview(dv)
-            // drops need hit testing; clicks need the button. Re-enable drop
-            // hit-test only during drag sessions via registered types on button:
-            b.window?.registerForDraggedTypes([.fileURL])
         }
         popover.behavior = .transient
         popover.contentViewController = makeSettingsVC()
