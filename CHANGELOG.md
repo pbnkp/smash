@@ -4,6 +4,78 @@ All notable changes to smash are documented here.
 
 ---
 
+## v5.0 — 2026-07-10
+
+The "many things in, one safe text file out" release.
+
+### Added
+- **Multi-input encode.** `smash f1.txt f2.php ./sub/f3.whatever dir/ ...`
+  encodes every operand (each artifact lands beside its own input unless
+  `-o`/`B64_OUTDIR` says otherwise). The old `too many args` error is gone.
+- **Multi-artifact decode.** `smash -d a b c [-o dir/]` decodes each.
+- **Argument-vector-as-text fallback.** When operands are *mostly not files*
+  (e.g. `` smash `ps auxww` `` — an unquoted command substitution that
+  explodes into dozens of words), smash now encodes the whole argument
+  vector as one inline-text payload (`args.xz.b64.<ts>.txt`) instead of
+  dying. It announces this loudly (even under `-q`) because it changes what
+  the artifact is. A typo guard keeps real file lists strict: if half or
+  more of the operands exist, a missing one is treated as a typo and smash
+  dies naming it — nothing is silently encoded as prose.
+- **`-` stdin operand.** `cmd | smash -` streams stdin explicitly (the bare
+  pipe form still works); `smash -d -` decodes an artifact piped or pasted
+  on stdin, restoring into the current directory.
+- **In-artifact manifest.** Every artifact now opens with a `# `-prefixed
+  manifest *before* the payload: tool + version, created (UTC) + host,
+  source name, kind, byte count, sha256 of the source bytes, the encoding
+  chain, a restore hint, and an explicit safety note that the payload is
+  inert data. Decode strips it automatically.
+- **LLM/agent-safe artifact format.** Artifact names now end in **`.txt`**
+  (`<name>.<mode>.b64.<timestamp>.txt`) and artifact contents are pure
+  printable ASCII (manifest + base64) — so AI assistants, agent tooling,
+  editors, and terminals can open any artifact safely even when the source
+  content is binary or encrypted. Collision suffixes stay *before* the
+  `.txt` so the extension always survives.
+- **`-V` / `--version`.**
+- **`-o` on encode.** Existing dir (or trailing `/`) = output directory;
+  otherwise a filename prefix for single input, or created as a directory
+  for multi input. (Previously `-o` was silently ignored on encode.)
+
+### Fixed
+- Operands after `--` were silently dropped; they are now honored verbatim
+  (dash-leading filenames encode/decode correctly).
+- Decoding an artifact of an empty source no longer dies; it restores the
+  empty file with a note.
+- `--ai` on a non-text input no longer mangles bytes through the awk
+  compactor — it falls back to lossless xz for that input, loudly.
+
+### Security
+- **Terminal-bleed hardening.** Source content is never written to the
+  terminal, and every dynamic string smash prints (filenames, API error
+  excerpts) is stripped of control/escape bytes first — ANSI/OSC escape
+  injection via a hostile filename or API response can no longer reach the
+  terminal. Verified in the release battery by asserting zero ESC bytes
+  across captured stdout+stderr while encoding files whose *names and
+  contents* contain OSC/CSI sequences.
+- **Artifacts are inert and non-executable.** Artifacts and restored files
+  are written mode `0600`; payloads are data only — nothing in smash ever
+  `eval`s, sources, or executes payload bytes, and the manifest says so in
+  the file itself.
+- **Option-injection guards.** `--` end-of-options added to `mv`/`cp`/
+  `chmod`/`tar` invocations that touch user-controlled names.
+- **Batch atomicity.** All operands are validated (readable, supported
+  type) *before* the first artifact is written, so a bad operand can't
+  leave a half-finished batch.
+
+### Compatibility
+- **Pre-v5 artifacts decode unchanged** (headerless single-line payloads,
+  with or without the `.txt` suffix). v5 artifacts require v5 to decode
+  (older versions don't strip the manifest).
+- Verified on: macOS `/bin/bash` 3.2 (60-check battery) and FreeBSD 12.1
+  bash 4.3 / xz 5.2.4 (15-check battery incl. cross-version decode of a
+  v4.5-produced artifact).
+
+---
+
 ## v4.5 — 2026-06-29
 
 ### Fixed
