@@ -1,0 +1,3 @@
+ui/macos/dist-mac/
+ui/web/dist/*.tmp
+*.bak

@@ -1,0 +1,9 @@
+{
+  "version": "5.0",
+  "assets": {
+    "index.html": "fed792bb987f529f4c2afdf4102eda0a6094d2c97468e7e1353b845b1fb7fdf3",
+    "app.min.js": "020e731ed530e1a16828ce5a4477607e946aa48455f344b6a437d02a6ed4455d",
+    "manifest.webmanifest": "8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4",
+    "icon.svg": "e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39"
+  }
+}
