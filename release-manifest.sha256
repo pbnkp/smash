@@ -16,7 +16,7 @@ fa776a6e52dabf9c0b428187de073e3b062a511fb596865ff4fb352cb23313e5  ./THREAT-MODEL
 92a1c93c5072388e404f9bd3aeae7b33977b39e5c629a232be8761f1aca5622e  ./ui/macos/install-quickactions.sh
 ff98dbf60bc389fac8c1ef78b126a0f19ab9e5ca9c3e28ba170f2f8ada361139  ./ui/macos/package.sh
 b1e0a3065fc2fe313fc6a20e304aa488576a091e1b68d931fa7c2615259db86f  ./ui/macos/sign-and-manifest.sh
-1fd2da74014702add5b6fee4b3eef3f12d95dab21341b0846ec7bec10b86a1f5  ./ui/macos/smash-menubar.swift
+9336e4c1d025b450a41d5f7b0a55af08449ab3a6eb1f41813c7be420ccf551dc  ./ui/macos/smash-menubar.swift
 d65fbef2c84a27193dacfaae26adfbd1ae93ad8c9daba878631c2ec28f63db11  ./ui/web/artifact.html
 9b1f07d1dfcc2d0d26347a8c03e5bd32ab4146209b8725efd41da99e5a95d1f5  ./ui/web/build-dist.sh
 7698835ae16ea8f697ad63b3f718d298831e2a8f49c10b68f06836bdefdc56f0  ./ui/web/build.sh

@@ -394,14 +394,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 let cands = [home(".local/bin/claude"), "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
                 let claude = cands.first { FileManager.default.isExecutableFile(atPath: $0) }
                 if let claude = claude {
-                    let p = Process()
-                    p.executableURL = URL(fileURLWithPath: claude)
-                    p.arguments = ["mcp", "add", "-s", "user", "smash", mcpPath()]
-                    let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
-                    try? p.run(); p.waitUntilExit()
-                    msg = p.terminationStatus == 0
-                        ? "network layer registered — Claude can now call smash (no API key)."
-                        : "claude mcp add failed — run: claude mcp add -s user smash ~/bin/smash-mcp"
+                    func runClaude(_ args: [String]) -> (Int32, String) {
+                        let p = Process()
+                        p.executableURL = URL(fileURLWithPath: claude)
+                        p.arguments = args
+                        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+                        do { try p.run() } catch { return (127, "") }
+                        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                        p.waitUntilExit()
+                        return (p.terminationStatus, out)
+                    }
+                    // `claude mcp add` exits 1 when the server is already
+                    // registered, which is success from the user's chair —
+                    // check registration first instead of reporting failure.
+                    if runClaude(["mcp", "get", "smash"]).0 == 0 {
+                        msg = "network layer already installed — Claude can call smash (no API key)."
+                    } else {
+                        let (rc, out) = runClaude(["mcp", "add", "-s", "user", "smash", mcpPath()])
+                        if rc == 0 {
+                            msg = "network layer registered — Claude can now call smash (no API key)."
+                        } else if out.contains("already exists") {
+                            msg = "network layer already installed — Claude can call smash (no API key)."
+                        } else {
+                            msg = "claude mcp add failed — run: claude mcp add -s user smash ~/bin/smash-mcp"
+                        }
+                    }
                 } else {
                     msg = "claude CLI not found — run: claude mcp add -s user smash ~/bin/smash-mcp"
                 }
