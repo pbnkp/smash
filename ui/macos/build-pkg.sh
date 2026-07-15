@@ -8,7 +8,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 ROOT="$WORK/root"
 SCRIPTS="$WORK/scripts"
-OUT="${1:-$PWD/dist-mac/Smash-5.1.pkg}"
+OUT="${1:-$PWD/dist-mac/Smash-5.2.pkg}"
 mkdir -p "$ROOT/Applications" "$ROOT/usr/local/bin" "$ROOT/usr/local/libexec/smash" "$SCRIPTS" "$(dirname "$OUT")"
 
 install -m 0555 smash "$ROOT/usr/local/bin/smash"
@@ -42,7 +42,7 @@ chmod 0555 "$SCRIPTS/postinstall"
 
 COMPONENT="$WORK/Smash-component.pkg"
 pkgbuild --root "$ROOT" --scripts "$SCRIPTS" \
-  --identifier com.pbnkp.smash --version 5.1 --install-location / "$COMPONENT"
+  --identifier com.pbnkp.smash --version 5.2 --install-location / "$COMPONENT"
 
 if security find-identity -v -p codesigning 2>/dev/null | grep -q 'Developer ID Installer: NKPS MEDIA'; then
   productbuild --package "$COMPONENT" --sign 'Developer ID Installer: NKPS MEDIA, LLC (HLT6DNEZSF)' "$OUT"

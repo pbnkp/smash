@@ -10,7 +10,7 @@
 ```
 brew tap pbnkp/smash
 brew install smash
-smash -V            # -> smash v5.1
+smash -V            # -> smash v5.2
 ```
 Or in one line: `brew install pbnkp/smash/smash`.
 
@@ -48,13 +48,13 @@ claude mcp add -s user smash ~/bin/smash-mcp
 { "mcpServers": { "smash": { "command": "/Users/you/bin/smash-mcp" } } }
 ```
 Verify: ask the client to call `smash_capabilities` — it returns
-`smash v5.1`. Optional local HTTP transport:
+`smash v5.2`. Optional local HTTP transport:
 `smash-mcp -http 127.0.0.1:7461` (bearer token printed to stderr).
 
 ## macOS package (recommended)
 ```
-ui/macos/build-pkg.sh dist-mac/Smash-5.1.pkg
-open dist-mac/Smash-5.1.pkg
+ui/macos/build-pkg.sh dist-mac/Smash-5.2.pkg
+open dist-mac/Smash-5.2.pkg
 ```
 The package installs `/Applications/Smash.app`, `/usr/local/bin/smash`,
 `/usr/local/bin/smash-mcp`, four Finder actions, and the Share extension.

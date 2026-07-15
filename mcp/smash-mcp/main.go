@@ -121,7 +121,7 @@ func schema(props map[string]interface{}, required ...string) map[string]interfa
 var tools = []toolDef{
 	{"smash_capabilities", "List smash version, engine binary, compression modes, artifact format, transports, and per-operation limits.", schema(map[string]interface{}{})},
 	{"smash_health", "Liveness/readiness: confirm the smash engine binary is present and executes. Returns ok|degraded|down with detail.", schema(map[string]interface{}{})},
-	{"smash_encode", "Losslessly compress+encode files/directories (or inline text) into smash artifacts (.b64.<ts>.txt: ASCII manifest + base64 payload). Returns artifact paths, sizes, sha256 of source; never raw content.",
+	{"smash_encode", "Losslessly compress+encode files/directories (or inline text) into readable .smash.txt artifacts (ASCII manifest + base64 payload). Returns artifact paths, sizes, sha256 of source; never raw content.",
 		schema(map[string]interface{}{
 			"paths":  obj("type", "array", "items", obj("type", "string"), "description", "files or directories to encode"),
 			"text":   obj("type", "string", "description", "inline text to encode instead of paths"),
@@ -568,7 +568,7 @@ func doCapabilities() (interface{}, error) {
 		"engine":         strings.TrimSpace(sv),
 		"binary":         smashBin,
 		"losslessModes":  modes,
-		"artifactFormat": ".<mode>.b64.<ts>.txt (ASCII manifest + base64 payload)",
+		"artifactFormat": "<source>.smash.txt (ASCII self-describing manifest + base64 payload)",
 		"transports":     []string{"stdio", "http-loopback", "http-gzip"},
 		"transportCompression": map[string]interface{}{
 			"http":                 "gzip request/response negotiation",

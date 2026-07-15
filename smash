@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smash v5.1 - Unified Encode/Decode Payload Manager
+# smash v5.2 - Unified Encode/Decode Payload Manager
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
 # Host: dual — bernie (FreeBSD 12.1) + Mac (darwin). bash 3.2-safe.
 #
@@ -54,7 +54,7 @@ set -euo pipefail
 umask 077
 IFS=$' \t\n'
 
-VERSION="5.1"
+VERSION="5.2"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -130,7 +130,7 @@ trap cleanup_all EXIT INT HUP TERM
 
 usage() {
   cat 1>&2 <<'EOF'
-smash v5.1 — encode/decode payload manager
+smash v5.2 — encode/decode payload manager
 
 usage:
   smash <file> [file|dir ...]     encode each operand (xz, default)
@@ -169,10 +169,11 @@ options:
   --              End of options; every following argument is an operand
 
 artifacts:
-  <name>.<mode>.b64.<timestamp>.txt — an ASCII text file: a `# ` manifest
+  <name>.smash.txt — an ASCII text file: a `# ` manifest
   (source, bytes, sha256, encoding, restore hint) followed by the base64
   payload. Safe for terminals, AI/LLM tooling, and copy-paste; the payload
   is inert data and artifacts are written mode 0600 (never executable).
+  Existing names become <name>.smash.2.txt, .3.txt, and so on.
 
 env:
   B64_OUTDIR=/some/dir          default output directory
@@ -199,7 +200,21 @@ utc_ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 safe_base() {
   local s="$1"
   s="${s##*/}"
-  s="$(printf '%s' "$s" | LC_ALL=C tr -cd 'A-Za-z0-9._-')"
+  # Keep words readable instead of deleting spaces, avoid hidden/repeated-dot
+  # outputs, and remove an old/new Smash suffix when re-smashing an artifact.
+  s="$(printf '%s' "$s" | LC_ALL=C sed -E \
+    -e 's/[^A-Za-z0-9._-]+/-/g' \
+    -e 's/[._-]{2,}/-/g' \
+    -e 's/^[._-]+//' \
+    -e 's/[._-]+$//')"
+  local previous=""
+  while [[ "$s" != "$previous" ]]; do
+    previous="$s"
+    s="$(printf '%s' "$s" | sed -E \
+      -e 's/\.(dtar\.)?(ai\.)?(xz|gz|zst)\.b64\.[0-9]{6}_[0-9]{6}(\.[0-9]+)?(\.txt)?$//' \
+      -e 's/\.smash(\.[0-9]+)?\.txt$//')"
+  done
+  s="$(printf '%.120s' "$s" | sed -E 's/[._-]+$//')"
   [[ -n "$s" ]] || s="data"
   printf '%s\n' "$s"
 }
@@ -214,15 +229,16 @@ pick_unique() {
   printf '%s\n' "$candidate"
 }
 
-# pick_outfile: build the artifact path. The collision counter goes BEFORE
-# the final .txt so the artifact always ends in an agent-readable extension.
+# pick_outfile: readable names put transport details in the manifest, not the
+# filename. The collision counter stays before .txt so that extension survives.
 pick_outfile() {
-  local outdir="$1" base="$2" ts="$3" ext="$4"
-  local candidate="${outdir}/${base}.${ext}.b64.${ts}.txt"
-  local n=0
+  local outdir="$1" base="$2"
+  base="$(safe_base "$base")"
+  local candidate="${outdir}/${base}.smash.txt"
+  local n=1
   while [[ -e "$candidate" ]]; do
     n=$((n+1))
-    candidate="${outdir}/${base}.${ext}.b64.${ts}.${n}.txt"
+    candidate="${outdir}/${base}.smash.${n}.txt"
   done
   printf '%s\n' "$candidate"
 }
@@ -1194,12 +1210,11 @@ encode_one() {
     die "verify failed: artifact corrupt. staged file: $TMP_FINAL"
   fi
 
-  local ts final_out final_bytes
-  ts="$(short_ts)"
+  local final_out final_bytes
   if [[ -n "$OUT_PREFIX" ]]; then
-    final_out="$(pick_outfile "$(dirname -- "$OUT_PREFIX")" "$(safe_base "$OUT_PREFIX")" "$ts" "$ext_label")"
+    final_out="$(pick_outfile "$(dirname -- "$OUT_PREFIX")" "$OUT_PREFIX")"
   else
-    final_out="$(pick_outfile "$OUTDIR" "$base" "$ts" "$ext_label")"
+    final_out="$(pick_outfile "$OUTDIR" "$base")"
   fi
 
   final_bytes=$(wc -c < "$TMP_FINAL" | tr -d ' ')
@@ -1278,7 +1293,7 @@ encode_path() {
     local tar_bytes
     tar_bytes=$(wc -c < "$TMP_TAR" | tr -d ' ')
     info 'smash: tar: %sB\n' "$tar_bytes"
-    encode_one "$TMP_TAR" "$input" "dir-tar" "${base}.dtar"
+    encode_one "$TMP_TAR" "$input" "dir-tar" "$base"
     rm -f "$TMP_TAR"; TMP_TAR=""
   else
     encode_one "$input" "$input" "file" "$base"
@@ -1299,16 +1314,31 @@ decode_one() {
 
   [[ -r "$infile" && -f "$infile" ]] || die "not a readable file: $(sn "$infile")"
 
-  # Detect directory tar (.dtar) for auto-extraction after decode
+  # Read the self-describing manifest first. New readable artifact names no
+  # longer duplicate compression, timestamp, or directory type in the name.
+  local manifest_source manifest_kind manifest_encoding
+  manifest_source="$(sed -n 's/^# source: \(.*\) | kind: .*/\1/p' "$infile" | head -n 1)"
+  manifest_kind="$(sed -n 's/^# source: .* | kind: \([^|]*\) | bytes:.*/\1/p' "$infile" | head -n 1)"
+  manifest_encoding="$(sed -n 's/^# encoding: \(.*\) | lossy:.*/\1/p' "$infile" | head -n 1)"
+
+  # Detect directory tar from the manifest, retaining old .dtar compatibility.
   local is_dtar=0
-  if [[ "$name" == *".dtar."* || "$name" == *".dtar" ]]; then
+  if [[ "$manifest_kind" == "dir-tar" || "$name" == *".dtar."* || "$name" == *".dtar" ]]; then
     is_dtar=1
   fi
 
   # Auto-detect compression and AI mode from extension. Works with both the
   # v5 (.b64.<ts>.txt) and pre-v5 (.b64.<ts>) artifact names.
   local is_ai=0 decomp="xz" ext_pattern="xz"
-  if [[ "$name" == *".ai.xz.b64"* ]]; then
+  if [[ "$manifest_encoding" == *"zstd("* || "$manifest_encoding" == *"zst("* ]]; then
+    decomp="zstd"; ext_pattern="zst"
+  elif [[ "$manifest_encoding" == *"gzip("* || "$manifest_encoding" == *"gz("* ]]; then
+    decomp="gz"; ext_pattern="gz"
+  elif [[ "$manifest_encoding" == *"ai"* ]]; then
+    decomp="xz"; is_ai=1; ext_pattern="ai.xz"
+  elif [[ "$manifest_encoding" == *"xz("* ]]; then
+    decomp="xz"; ext_pattern="xz"
+  elif [[ "$name" == *".ai.xz.b64"* ]]; then
     decomp="xz"; is_ai=1; ext_pattern="ai.xz"
   elif [[ "$name" == *".xz.b64"* ]]; then
     decomp="xz"; ext_pattern="xz"
@@ -1326,10 +1356,15 @@ decode_one() {
     out_path="$DEC_OUT_FILE"
   else
     local bare="$name"
-    if [[ "$bare" == *".${ext_pattern}.b64."* ]]; then
+    if [[ -n "$manifest_source" ]]; then
+      bare="$(safe_base "$manifest_source")"
+      [[ "$is_dtar" -eq 0 ]] || bare="${bare}.dtar"
+    elif [[ "$bare" == *".${ext_pattern}.b64."* ]]; then
       bare="${bare%%.${ext_pattern}.b64.*}"
     elif [[ "$bare" == *.${ext_pattern}.b64 ]]; then
       bare="${bare%.${ext_pattern}.b64}"
+    else
+      bare="$(printf '%s' "$bare" | sed -E 's/\.smash(\.[0-9]+)?\.txt$//')"
     fi
     [[ -n "$bare" ]] || bare="restored"
 
@@ -1497,7 +1532,7 @@ else
     resolve_encode_out 1 ""
     TMP_STDIN="$(mktemp "${SMASH_TMP}/smash.in.XXXXXX")"
     printf '%s' "${OPERANDS[*]}" > "$TMP_STDIN"
-    encode_one "$TMP_STDIN" "command-line arguments" "inline-args(${N_OPS})" "args"
+    encode_one "$TMP_STDIN" "command-line arguments" "inline-args(${N_OPS})" "command-line-text"
     rm -f "$TMP_STDIN"; TMP_STDIN=""
     exit 0
   fi
@@ -1509,7 +1544,7 @@ else
     string)
       TMP_STDIN="$(mktemp "${SMASH_TMP}/smash.in.XXXXXX")"
       printf '%s' "$TEXT" > "$TMP_STDIN"
-      encode_one "$TMP_STDIN" "string (-s)" "string" "string"
+      encode_one "$TMP_STDIN" "string (-s)" "string" "pasted-text"
       rm -f "$TMP_STDIN"; TMP_STDIN=""
       ;;
     edit)
@@ -1534,7 +1569,7 @@ else
       [[ ${#ed_cmd[@]} -gt 0 ]] || die "--edit needs a working \$EDITOR/\$VISUAL or one of: nano pico vi vim"
       command -v "${ed_cmd[0]}" >/dev/null 2>&1 || die "editor not found in PATH: ${ed_cmd[0]}"
       "${ed_cmd[@]}" "$TMP_TXT"
-      encode_one "$TMP_TXT" "editor session" "edit" "edit"
+      encode_one "$TMP_TXT" "editor session" "edit" "edited-text"
       rm -f "$TMP_TXT"; TMP_TXT=""
       ;;
     auto)
@@ -1551,7 +1586,9 @@ PROMPT
       TMP_STDIN="$(mktemp "${SMASH_TMP}/smash.in.XXXXXX")"
       cat > "$TMP_STDIN"
       [[ -t 0 ]] && printf '\n' 1>&2
-      encode_one "$TMP_STDIN" "stdin stream" "stdin" "stdin"
+      stream_label="stdin stream"
+      [[ -z "$OUT_PREFIX" ]] || stream_label="$(basename -- "$OUT_PREFIX")"
+      encode_one "$TMP_STDIN" "$stream_label" "stdin" "piped-text"
       rm -f "$TMP_STDIN"; TMP_STDIN=""
       ;;
     *)

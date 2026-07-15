@@ -57,16 +57,24 @@ func keychainGet(_ account: String) -> String {
 struct JobResult { let ok: Bool; let line: String; let artifact: String? }
 
 final class Engine {
-    static func run(args: [String], env extra: [String: String] = [:], timeout: TimeInterval = 300) -> (Int32, String, String) {
+    static func run(args: [String], env extra: [String: String] = [:], input: Data? = nil,
+                    timeout: TimeInterval = 300) -> (Int32, String, String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: smashPath())
         p.arguments = args
         var env = ProcessInfo.processInfo.environment
         for (k, v) in extra { env[k] = v }
         p.environment = env
-        let so = Pipe(), se = Pipe()
+        let so = Pipe(), se = Pipe(), si = Pipe()
         p.standardOutput = so; p.standardError = se
+        if input != nil { p.standardInput = si }
         do { try p.run() } catch { return (127, "", "cannot launch smash: \(error.localizedDescription)") }
+        if let input = input {
+            DispatchQueue.global().async {
+                si.fileHandleForWriting.write(input)
+                try? si.fileHandleForWriting.close()
+            }
+        }
         let deadline = Date().addingTimeInterval(timeout)
         DispatchQueue.global().async {
             while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
@@ -102,8 +110,8 @@ final class Engine {
         try? FileManager.default.createDirectory(atPath: outdir, withIntermediateDirectories: true)
         let mode = ud.string(forKey: "mode") ?? "xz"
 
-        let artifacts = paths.filter { $0.contains(".b64.") }
-        let inputs = paths.filter { !$0.contains(".b64.") }
+        let artifacts = paths.filter { $0.contains(".b64.") || $0.range(of: #"\.smash(?:\.\d+)?\.txt$"#, options: .regularExpression) != nil }
+        let inputs = paths.filter { !artifacts.contains($0) }
 
         if !artifacts.isEmpty {
             let (rc, _, err) = run(args: ["-d", "-o", outdir + "/", "--"] + artifacts)
@@ -138,6 +146,34 @@ final class Engine {
         }
         return results
     }
+
+    static func process(text: String) -> [JobResult] {
+        let outdir = ud.string(forKey: "outdir") ?? home("smashes")
+        try? FileManager.default.createDirectory(atPath: outdir, withIntermediateDirectories: true)
+        var args: [String] = []
+        var env: [String: String] = [:]
+        switch ud.string(forKey: "mode") ?? "xz" {
+        case "gz": args.append("-g")
+        case "zstd": args.append("-z")
+        case "ai": args.append("--ai")
+        case "ai-api": args.append("--ai-api"); env = aiEnv()
+        default: break
+        }
+        args += ["-o", (outdir as NSString).appendingPathComponent("Clipboard Text.txt"), "-"]
+        let (rc, _, err) = run(args: args, env: env, input: Data(text.utf8))
+        var results: [JobResult] = []
+        for line in err.split(separator: "\n") {
+            let s = String(line)
+            if let r = s.range(of: "encoded: ") {
+                let art = String(s[r.upperBound...])
+                results.append(JobResult(ok: true, line: (art as NSString).lastPathComponent, artifact: art))
+            }
+        }
+        if rc != 0 {
+            results.append(JobResult(ok: false, line: "clipboard text failed: " + (err.split(separator: "\n").last.map(String.init) ?? ""), artifact: nil))
+        }
+        return results
+    }
 }
 
 // ---------- drop view over the status button ----------
@@ -149,16 +185,20 @@ final class Engine {
 // (→ onDrop); we do NOT override hitTest, so the view receives both.
 final class DropView: NSView {
     var onDrop: (([String]) -> Void)?
+    var onTextDrop: ((String) -> Void)?
     var onClick: (() -> Void)?
     override init(frame: NSRect) {
         super.init(frame: frame)
-        registerForDraggedTypes([.fileURL])
+        registerForDraggedTypes([.fileURL, .string])
         wantsLayer = true
     }
     required init?(coder: NSCoder) { nil }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
-        return sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) ? .copy : []
+        let pb = sender.draggingPasteboard
+        let valid = pb.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+            || pb.string(forType: .string) != nil
+        return valid ? .copy : []
     }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
     override func draggingExited(_ sender: NSDraggingInfo?) { layer?.backgroundColor = NSColor.clear.cgColor }
@@ -169,9 +209,11 @@ final class DropView: NSView {
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
         ) as? [URL] ?? []
-        if urls.isEmpty { return false }
-        onDrop?(urls.map { $0.path })
-        return true
+        if !urls.isEmpty { onDrop?(urls.map { $0.path }); return true }
+        if let text = sender.draggingPasteboard.string(forType: .string), !text.isEmpty {
+            onTextDrop?(text); return true
+        }
+        return false
     }
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
@@ -181,12 +223,13 @@ final class DropView: NSView {
 // a button that opens a file/folder picker.
 final class PanelDropZone: NSView {
     var onDrop: (([String]) -> Void)?
+    var onTextDrop: ((String) -> Void)?
     var onPick: (() -> Void)?
-    private let label = NSTextField(labelWithString: "Drop files or folders to Smash\nDrop Smash artifacts to Restore")
+    private let label = NSTextField(labelWithString: "Drop files, folders, or text to Smash\nDrop Smash artifacts to Restore\nOr click to choose")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        registerForDraggedTypes([.fileURL])
+        registerForDraggedTypes([.fileURL, .string])
         wantsLayer = true
         layer?.cornerRadius = 10
         layer?.borderWidth = 1
@@ -196,7 +239,7 @@ final class PanelDropZone: NSView {
         label.alignment = .center
         label.font = .systemFont(ofSize: 11, weight: .medium)
         label.textColor = .secondaryLabelColor
-        label.maximumNumberOfLines = 2
+        label.maximumNumberOfLines = 3
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
@@ -205,7 +248,7 @@ final class PanelDropZone: NSView {
             label.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Drop files or folders to Smash; drop Smash artifacts to Restore; or click to choose")
+        setAccessibilityLabel("Drop files, folders, or text to Smash; drop Smash artifacts to Restore; or click to choose")
     }
     required init?(coder: NSCoder) { nil }
 
@@ -218,9 +261,10 @@ final class PanelDropZone: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let valid = sender.draggingPasteboard.canReadObject(
+        let pb = sender.draggingPasteboard
+        let valid = pb.canReadObject(
             forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
-        )
+        ) || pb.string(forType: .string) != nil
         highlight(valid)
         return valid ? .copy : []
     }
@@ -232,9 +276,11 @@ final class PanelDropZone: NSView {
         let urls = sender.draggingPasteboard.readObjects(
             forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
         ) as? [URL] ?? []
-        guard !urls.isEmpty else { return false }
-        onDrop?(urls.map { $0.path })
-        return true
+        if !urls.isEmpty { onDrop?(urls.map { $0.path }); return true }
+        if let text = sender.draggingPasteboard.string(forType: .string), !text.isEmpty {
+            onTextDrop?(text); return true
+        }
+        return false
     }
     override func mouseDown(with event: NSEvent) { onPick?() }
 }
@@ -265,6 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let dv = DropView(frame: b.bounds)
             dv.autoresizingMask = [.width, .height]
             dv.onDrop = { [weak self] paths in self?.handle(paths: paths) }
+            dv.onTextDrop = { [weak self] text in self?.handle(text: text) }
             dv.onClick = { [weak self] in self?.togglePopover() }
             b.addSubview(dv)
         }
@@ -315,16 +362,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.global().async {
             let rs = Engine.process(paths: paths)
             DispatchQueue.main.async {
-                self.results = (rs + self.results).prefix(6).map { $0 }
-                self.refreshResults()
-                let okAll = rs.allSatisfy { $0.ok } && !rs.isEmpty
-                self.setStatus(okAll ? "done — \(rs.count) artifact(s)" : "finished with errors")
-                if let b = self.status.button {
-                    b.image = NSImage(systemSymbolName: okAll ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-                        b.image = NSImage(systemSymbolName: "archivebox.fill", accessibilityDescription: "smash")
-                    }
-                }
+                self.finish(results: rs)
+            }
+        }
+    }
+
+    func handle(text: String) {
+        guard !text.isEmpty else { setStatus("clipboard has no text"); return }
+        setStatus("smashing clipboard text…")
+        DispatchQueue.global().async {
+            let rs = Engine.process(text: text)
+            DispatchQueue.main.async { self.finish(results: rs) }
+        }
+    }
+
+    func finish(results rs: [JobResult]) {
+        self.results = (rs + self.results).prefix(6).map { $0 }
+        self.refreshResults()
+        let okAll = rs.allSatisfy { $0.ok } && !rs.isEmpty
+        self.setStatus(okAll ? "done — \(rs.count) artifact(s)" : "finished with errors")
+        if let b = self.status.button {
+            b.image = NSImage(systemSymbolName: okAll ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                b.image = NSImage(systemSymbolName: "archivebox.fill", accessibilityDescription: "smash")
             }
         }
     }
@@ -390,10 +450,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let dropZone = PanelDropZone(frame: .zero)
         dropZone.onDrop = { [weak self] paths in self?.handle(paths: paths) }
+        dropZone.onTextDrop = { [weak self] text in self?.handle(text: text) }
         dropZone.onPick = { [weak self] in self?.pickInputs() }
         dropZone.widthAnchor.constraint(equalToConstant: 288).isActive = true
-        dropZone.heightAnchor.constraint(equalToConstant: 64).isActive = true
+        dropZone.heightAnchor.constraint(equalToConstant: 76).isActive = true
         root.addArrangedSubview(dropZone)
+
+        let clipboardBtn = NSButton(title: "Smash Clipboard Text", target: self, action: #selector(smashClipboard))
+        clipboardBtn.bezelStyle = .rounded
+        clipboardBtn.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        root.addArrangedSubview(clipboardBtn)
 
         // mode + output
         root.addArrangedSubview(label("COMPRESSION", bold: true))
@@ -511,6 +577,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if p.runModal() == .OK {
             handle(paths: p.urls.map { $0.path })
         }
+    }
+    @objc func smashClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+            setStatus("clipboard has no text")
+            return
+        }
+        handle(text: text)
     }
     @objc func installMCP() {
         setStatus("installing network layer…")

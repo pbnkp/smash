@@ -30,8 +30,8 @@ cat > "$APPEX/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Smash</string>
   <key>CFBundleExecutable</key><string>SmashShare</string>
   <key>CFBundlePackageType</key><string>XPC!</string>
-  <key>CFBundleShortVersionString</key><string>5.1</string>
-  <key>CFBundleVersion</key><string>5.1</string>
+  <key>CFBundleShortVersionString</key><string>5.2</string>
+  <key>CFBundleVersion</key><string>5.2</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSExtension</key><dict>
     <key>NSExtensionPointIdentifier</key><string>com.apple.share-services</string>

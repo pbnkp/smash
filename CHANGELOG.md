@@ -4,6 +4,21 @@ All notable changes to smash are documented here.
 
 ---
 
+## v5.2 — 2026-07-15
+
+The readable-artifact and clipboard-drop release.
+
+### Added
+- Readable artifact names now use `<source>.smash.txt`, with `.2`, `.3`, etc.
+  only for collisions. Compression, time, source kind, and checksums remain in
+  the self-describing manifest; old timestamped `.b64` names still restore.
+- The integrated macOS drop zone accepts dragged text as well as files and
+  folders, and includes a **Smash Clipboard Text** button for large copied text.
+  Clipboard content streams directly to Smash and is not staged as plaintext
+  in a temporary file.
+
+---
+
 ## v5.1 — 2026-07-15
 
 The permission-safe restore and complete macOS integration release.

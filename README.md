@@ -100,30 +100,29 @@ smash                           # interactive paste mode (Ctrl+D to finish)
 Encoded artifacts are plain ASCII **text files**, named by convention:
 
 ```
-<basename>.<compression>.b64.<timestamp>.txt
+<meaningful-name>.smash.txt
 
 Examples:
-  config.json.xz.b64.260710_143022.txt    # lossless xz
-  config.json.gz.b64.260710_143022.txt    # lossless gzip
-  config.json.zst.b64.260710_143022.txt   # lossless zstd
-  notes.txt.ai.xz.b64.260710_143022.txt   # AI semantic + xz
-  project.dtar.xz.b64.260710_143022.txt   # directory (tar + xz)
-  args.xz.b64.260710_143022.txt           # inline argument-vector text
+  config.json.smash.txt                   # first artifact
+  config.json.smash.2.txt                 # collision-safe second artifact
+  project.smash.txt                       # directory (described in manifest)
+  Clipboard-Text.txt.smash.txt            # clipboard text from the Mac app
 ```
 
 The `.txt` terminal extension is deliberate: artifact contents are pure
 printable ASCII (a manifest + one base64 payload line), so terminals, AI
 assistants, agent file tools, editors, and copy-paste channels can all
 handle any artifact safely — even when the *source* was binary, encrypted,
-or full of escape sequences. Collision suffixes are inserted before the
-`.txt` so the extension always survives.
+or full of escape sequences. Compression, source kind, timestamp, and checksum
+live in the manifest instead of cluttering the filename. Collision numbers are
+inserted before `.txt` so the extension always survives.
 
 Every artifact opens with an in-file manifest describing the contents
 before the data flow:
 
 ```
-# ==== SMASH ARTIFACT v5.1 ====
-# tool: smash v5.1 (sole author: pbnkp)
+# ==== SMASH ARTIFACT v5.2 ====
+# tool: smash v5.2 (sole author: pbnkp)
 # created: 2026-07-10T12:34:56Z | host: example-host
 # source: config.json | kind: file | bytes: 48234 | sha256: 9f2a...c41d
 # encoding: base64( xz( source ) ) | lossy: no
@@ -135,9 +134,9 @@ before the data flow:
 ```
 
 `smash -d` strips the manifest automatically, and still decodes **pre-v5
-headerless artifacts** unchanged. The `.dtar` extension marks a tarred
-directory — `smash -d` automatically extracts it back to a directory on
-decode (rejecting absolute/`..` traversal members first).
+headerless artifacts** unchanged. For new artifacts the manifest marks tarred
+directories; old `.dtar` names remain supported. `smash -d` automatically
+extracts directories (rejecting absolute/`..` traversal members first).
 
 ---
 
@@ -258,10 +257,10 @@ RULES:
 ```bash
 # Encode a config file for clipboard transport
 smash config.yaml
-# → config.yaml.xz.b64.260710_143022.txt
+# → config.yaml.smash.txt
 
 # Decode it on the other end
-smash -d config.yaml.xz.b64.260710_143022.txt
+smash -d config.yaml.smash.txt
 # → config.yaml (restored)
 ```
 
@@ -269,7 +268,7 @@ smash -d config.yaml.xz.b64.260710_143022.txt
 ```bash
 smash notes.txt api.php ./logs/error.log ./my-project/
 # → four artifacts, each beside its own input
-smash -d *.b64.*.txt -o restored/
+smash -d *.smash*.txt -o restored/
 ```
 
 **Command output, three ways:**
@@ -286,7 +285,7 @@ smash `ps auxww`            # unquoted: args are mostly not files, so smash
 smash --ai large-doc.md
 # smash: ai: 48234B -> 19847B (41% text, before xz+b64)
 # smash: total: 48234B -> 8203B b64 (17%)
-# encoded: large-doc.md.ai.xz.b64.260507_143302
+# encoded: large-doc.md.smash.txt
 ```
 
 **LLM compression with Anthropic:**
@@ -295,17 +294,17 @@ export ANTHROPIC_API_KEY=sk-ant-...
 smash --ai-api large-doc.md
 # smash: ai-api: 48234B -> 4891B (10% text, before xz+b64)
 # smash: total: 48234B -> 1204B b64 (2%)
-# encoded: large-doc.md.ai.xz.b64.260507_143401
+# encoded: large-doc.md.smash.2.txt
 ```
 
 **Compress an entire project directory:**
 ```bash
 smash --ai ./my-project/
 # Compresses all text files, tars, xz+b64 encodes
-# → my-project.dtar.ai.xz.b64.260507_143500
+# → my-project.smash.txt
 
 # Restore it
-smash -d my-project.dtar.ai.xz.b64.260507_143500
+smash -d my-project.smash.txt
 # → my-project/ (extracted)
 ```
 

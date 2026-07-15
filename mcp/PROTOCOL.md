@@ -8,7 +8,7 @@ artifact **paths + metadata** — never raw content.
 
 - Version: `smash-mcp v1.2`
 - MCP protocol: `2025-06-18`
-- Engine: the `smash` CLI (v5.1) is the single source of truth. The server
+- Engine: the `smash` CLI (v5.2) is the single source of truth. The server
   produces byte-identical artifacts to the CLI because it *is* the CLI.
 - Language: Go, written to the **Go 1.13** language level (`io/ioutil`, no
   generics, no post-1.13 stdlib). Builds clean on go1.22 (macOS arm64 +
@@ -42,7 +42,7 @@ result carries an `evidence` field (`CREATED`, `RUNTIME_VERIFIED`,
 ### Result shape (example: `smash_encode`)
 ```json
 { "ok": true, "lossy": false, "evidence": "CREATED",
-  "artifacts": [ { "artifact": "/path/x.xz.b64.<ts>.txt", "bytes": 780,
+  "artifacts": [ { "artifact": "/path/x.smash.txt", "bytes": 780,
                    "sha256": "9f2a…c41d" } ] }
 ```
 
@@ -148,4 +148,4 @@ than content dumps.
   method → -32601, unknown tool → isError, duplicate id both answered,
   notification-only stays silent, no content dumps in the protocol channel.
 - In-client: `smash_capabilities` answers through standard MCP clients against
-  `smash v5.1`; no custom client codec is required.
+  `smash v5.2`; no custom client codec is required.

@@ -8,7 +8,7 @@ CLI's runtime `xz`.
 The CLI is a single Bash script — nothing to build. Lint + smoke:
 ```
 bash -n smash            # syntax (bash 3.2-safe)
-./smash -V               # -> smash v5.1
+./smash -V               # -> smash v5.2
 ```
 Runtime deps: `openssl`, `xz`, `gzip` (all present on macOS/FreeBSD); `zstd`
 only for `-z`; `jq`+`curl` only for `--ai-api`.
@@ -68,7 +68,7 @@ ui/macos/build-share-extension.sh ~/Applications/Smash.app
 Build the all-in-one installer package (app, CLI, MCP, Share extension, and
 Finder actions):
 ```
-ui/macos/build-pkg.sh dist-mac/Smash-5.1.pkg
+ui/macos/build-pkg.sh dist-mac/Smash-5.2.pkg
 ```
 
 ## Finder integration
