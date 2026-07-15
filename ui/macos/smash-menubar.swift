@@ -182,7 +182,7 @@ final class DropView: NSView {
 final class PanelDropZone: NSView {
     var onDrop: (([String]) -> Void)?
     var onPick: (() -> Void)?
-    private let label = NSTextField(labelWithString: "Drop files, folders, or artifacts here\n—or click to choose—")
+    private let label = NSTextField(labelWithString: "Drop files or folders to Smash\nDrop Smash artifacts to Restore")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -205,7 +205,7 @@ final class PanelDropZone: NSView {
             label.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Drop files into Smash or click to choose files")
+        setAccessibilityLabel("Drop files or folders to Smash; drop Smash artifacts to Restore; or click to choose")
     }
     required init?(coder: NSCoder) { nil }
 
@@ -507,7 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         p.canChooseDirectories = true
         p.canChooseFiles = true
         p.allowsMultipleSelection = true
-        p.prompt = "Smash"
+        p.prompt = "Smash or Restore"
         if p.runModal() == .OK {
             handle(paths: p.urls.map { $0.path })
         }
