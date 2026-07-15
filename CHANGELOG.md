@@ -23,6 +23,9 @@ The permission-safe restore and complete macOS integration release.
   provider instead of relying only on Automator.
 - Finder installer registers and validates all four Quick Actions, clearing
   stale partial Service registrations first.
+- macOS package/custom upgrades remove the obsolete standalone
+  `com.boy.smash-dropzone` LaunchAgent now that dropping and restoring are
+  integrated into the main Smash menu app.
 
 ### Added
 - MCP v1.2 HTTP transport accepts gzip request bodies and negotiates gzip

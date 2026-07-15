@@ -26,6 +26,11 @@ set -e
 console_user=$(stat -f '%Su' /dev/console)
 if [ -n "$console_user" ] && [ "$console_user" != root ]; then
   user_home=$(dscl . -read "/Users/$console_user" NFSHomeDirectory | awk '{print $2}')
+  user_uid=$(id -u "$console_user")
+  launchctl bootout "gui/$user_uid" "$user_home/Library/LaunchAgents/com.boy.smash-dropzone.plist" 2>/dev/null \
+    || launchctl remove com.boy.smash-dropzone 2>/dev/null || true
+  rm -f "$user_home/Library/LaunchAgents/com.boy.smash-dropzone.plist"
+  rm -rf "$user_home/.boy-data/smash-dropzone"
   sudo -u "$console_user" env HOME="$user_home" SMASH_BIN=/usr/local/bin/smash \
     /usr/local/libexec/smash/install-quickactions.sh || true
 fi

@@ -1,6 +1,5 @@
 20b2e969b3eb7aa18fb8edb77407e007bc657d80167fdef745ef1cdf5cdecf09  ./mcp/smash-mcp/main.go
 2b68273ad7ad7b4d4039e7a0d9051190558fd2a987eb98f10097afd56ab137f1  ./mcp/smash-mcp/go.mod
-343e3b8798befa0f38e79938e89ef2648cb423c8a096d572aa85fcabda21a940  ./ui/macos/install-macos.sh
 3e141097f52a6ab1a65a140d5b1ec4fd411db0dc9169dc55e7e4cfb528acbb4d  ./ui/web/dist/integrity.json
 4507688f18e3d8c5588d3de116d1069c13d150481d9ae5e21af3a000306fb234  ./ui/web/minify.py
 4abd581aa07748ff3f1f7e5f095732410891a6fca7fce7d1e997d4ed3f674090  ./LICENSE
@@ -8,9 +7,7 @@
 54bc8abc264b9b03585b496c67df28d6c9e48a16f180551e9d2354769b226c6d  ./ui/web/sw.js.tpl
 550403cfdf3ea71a130d70d0af047b99d2b10debeb42bce1ecea1b709ba3f87d  ./mcp/smash-mcp/main_test.go
 55b91f5d0328fcc3179f7908f15a85c4bef68689ae2a4d8c80efdce443f6bf6f  ./ui/web/dist/sw.js
-73ab7f2d80767598b682bc7c84325ee61a01818ade873f0d77474bf2a3e1ef00  ./ui/macos/uninstall-macos.sh
 7698835ae16ea8f697ad63b3f718d298831e2a8f49c10b68f06836bdefdc56f0  ./ui/web/build.sh
-77901146f2c33d1298bcea19c82f0c1e3d7366fa81928448cfc8757d5f1a1bdd  ./CHANGELOG.md
 7ccd57d788e06514233390e8fd37439d367677b04d3e3f5c49bd758eca604ef9  ./install.sh
 7ffbc41ef2331c847ec7315b9319068bbf929357a5f135e8ed1c85afcc259d52  ./ui/macos/build-share-extension.sh
 81f5d1ba42e05a43b36c00027323dab9f83b92c0518027adc949d8a63ba0e30f  ./logo.svg
@@ -18,7 +15,10 @@
 85b5d70484d56a5dbe916716a2721c312eb4632d9b1e1778458a52b00f02f742  ./INSTALL.md
 86133a09a1adc39920092d1b99f431c1a626fcaf85de6bc8e00e793629ead8db  ./ui/macos/SmashShareViewController.swift
 88ae28af3b868c4d528f269b929d98025472730956c5b6904a7bc241ca38aab1  ./smash
+88cfd12d77389f80338b6260377e9f6a4583b7af5c346170e4416026137e21d5  ./ui/macos/build-pkg.sh
 8a7333cdce6593b8ac505e932692df95d2383071417733ebd7011ad6bc906e4c  ./ui/web/dist/index.html
+8b496e67d7e1a80b54a11291d9e256c2d8ff6939d944eb7c34f8354b17720f99  ./ui/macos/install-macos.sh
+8e78143978816b8394d9f8ade21f5e61baedbde38168c2ec7b87adb77d135a60  ./ui/macos/uninstall-macos.sh
 8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4  ./ui/web/dist/manifest.webmanifest
 8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4  ./ui/web/manifest.webmanifest
 9b1f07d1dfcc2d0d26347a8c03e5bd32ab4146209b8725efd41da99e5a95d1f5  ./ui/web/build-dist.sh
@@ -27,7 +27,6 @@ b1e0a3065fc2fe313fc6a20e304aa488576a091e1b68d931fa7c2615259db86f  ./ui/macos/sig
 b2acef91f7d6f00944bf1cd4cc8705a28d1c7d881b19fb8087773f97bc6e8aa0  ./README.md
 b47efc760ee1c855d1feefbc7beb0667a362503aade1f2449a6b698752dae603  ./.gitignore
 c40b087f5af9f47fd458aead15c006801749c3223f2505751ecd6342b1e2fde5  ./ui/macos/build-app.sh
-c6682e1a534bd3f829810e7714ce9831d37c662b4d25d805501aa3c0bed4eaac  ./ui/macos/build-pkg.sh
 cc4e1747cfaea2a75908d316afc7181e30b4a2c2b946752c2b26bd17f0f9b87d  ./ui/web/smash-web.app.js
 ccc3a34008a2dd741f68612c48f1ecf6c91b86ae3c2df7704e82eefdffb2e557  ./ui/web/dist/deploy-csp.conf
 ce25a8de95de90a4904bb94db75fd5c04fd82bcd3553720f43bf0d04b5bf4217  ./ui/macos/install-quickactions.sh
@@ -39,5 +38,6 @@ e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39  ./ui/web/dist/
 e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39  ./ui/web/icon.svg
 e4dbbaa543e5852737a7a0df704cee5f1bd2ebc461c2b82a03d37ba16ce9cf85  ./ROLLBACK.md
 ea8a84277a65e48a8e2e1e8751e9a4f278a07bbd4b148941253fa28f23ec5c24  ./ui/web/dist/app.min.js
+eeea0d198106ffebab8dc3817ab33f0ff577b3646bd1728c92dd28965445caaa  ./CHANGELOG.md
 f73d86155a2dcf6aab911f8c740339e51d30bc15516f51b725c82494f74a36bb  ./ui/macos/SmashShare.entitlements
 ff98dbf60bc389fac8c1ef78b126a0f19ab9e5ca9c3e28ba170f2f8ada361139  ./ui/macos/package.sh

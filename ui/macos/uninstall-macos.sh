@@ -21,8 +21,12 @@ rm -rf "$HOME/Library/Services/Smash.workflow" \
        "$HOME/Library/Services/Restore (smash -d).workflow" \
        "$HOME/Library/Services/Smash Selected Text.workflow"
 
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.boy.smash-dropzone.plist" 2>/dev/null \
+  || launchctl remove com.boy.smash-dropzone 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.boy.smash-dropzone.plist"
+rm -rf "$HOME/.boy-data/smash-dropzone"
+
 /System/Library/CoreServices/pbs -flush 2>/dev/null || true
 /System/Library/CoreServices/pbs -update 2>/dev/null || true
 pkill -x smash-menubar 2>/dev/null || true
 echo "Smash uninstalled (artifacts in ~/smashes were preserved)"
-
