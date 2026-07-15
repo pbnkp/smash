@@ -11,6 +11,7 @@
 73ab7f2d80767598b682bc7c84325ee61a01818ade873f0d77474bf2a3e1ef00  ./ui/macos/uninstall-macos.sh
 7698835ae16ea8f697ad63b3f718d298831e2a8f49c10b68f06836bdefdc56f0  ./ui/web/build.sh
 77901146f2c33d1298bcea19c82f0c1e3d7366fa81928448cfc8757d5f1a1bdd  ./CHANGELOG.md
+7cc97455e79567b3c8bc579424f8f30cabf49123e9ddca06ab664af21e0d3a94  ./ui/macos/smash-menubar.swift
 7ccd57d788e06514233390e8fd37439d367677b04d3e3f5c49bd758eca604ef9  ./install.sh
 7ffbc41ef2331c847ec7315b9319068bbf929357a5f135e8ed1c85afcc259d52  ./ui/macos/build-share-extension.sh
 81f5d1ba42e05a43b36c00027323dab9f83b92c0518027adc949d8a63ba0e30f  ./logo.svg
@@ -38,6 +39,5 @@ e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39  ./ui/web/dist/
 e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39  ./ui/web/icon.svg
 e4dbbaa543e5852737a7a0df704cee5f1bd2ebc461c2b82a03d37ba16ce9cf85  ./ROLLBACK.md
 ea8a84277a65e48a8e2e1e8751e9a4f278a07bbd4b148941253fa28f23ec5c24  ./ui/web/dist/app.min.js
-ed9495471ce801284113e9c8d3cae1c66c9e888727d791c8a820aacc7dafe4de  ./ui/macos/smash-menubar.swift
 f73d86155a2dcf6aab911f8c740339e51d30bc15516f51b725c82494f74a36bb  ./ui/macos/SmashShare.entitlements
 ff98dbf60bc389fac8c1ef78b126a0f19ab9e5ca9c3e28ba170f2f8ada361139  ./ui/macos/package.sh

@@ -176,6 +176,69 @@ final class DropView: NSView {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
+// Large, discoverable drop target inside the menu popover. It shares the same
+// file-URL-only safety boundary as the status-item drop target and doubles as
+// a button that opens a file/folder picker.
+final class PanelDropZone: NSView {
+    var onDrop: (([String]) -> Void)?
+    var onPick: (() -> Void)?
+    private let label = NSTextField(labelWithString: "Drop files, folders, or artifacts here\n—or click to choose—")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL])
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.45).cgColor
+
+        label.alignment = .center
+        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.maximumNumberOfLines = 2
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Drop files into Smash or click to choose files")
+    }
+    required init?(coder: NSCoder) { nil }
+
+    private func highlight(_ active: Bool) {
+        layer?.borderWidth = active ? 2 : 1
+        layer?.borderColor = (active ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
+        layer?.backgroundColor = (active ? NSColor.controlAccentColor.withAlphaComponent(0.16)
+                                          : NSColor.controlBackgroundColor.withAlphaComponent(0.45)).cgColor
+        label.textColor = active ? .labelColor : .secondaryLabelColor
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let valid = sender.draggingPasteboard.canReadObject(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        )
+        highlight(valid)
+        return valid ? .copy : []
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func draggingExited(_ sender: NSDraggingInfo?) { highlight(false) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { highlight(false) }
+        let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        guard !urls.isEmpty else { return false }
+        onDrop?(urls.map { $0.path })
+        return true
+    }
+    override func mouseDown(with event: NSEvent) { onPick?() }
+}
+
 // ---------- app ----------
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var status: NSStatusItem!
@@ -266,7 +329,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func setStatus(_ s: String) { statusLine.stringValue = s }
+    func setStatus(_ s: String) {
+        statusLine.stringValue = s
+        statusLine.toolTip = s
+        statusLine.setAccessibilityLabel(s)
+        statusLine.invalidateIntrinsicContentSize()
+    }
 
     func refreshResults() {
         resultsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -319,8 +387,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let title = NSTextField(labelWithString: "SMASH")
         title.font = .monospacedSystemFont(ofSize: 15, weight: .heavy)
         root.addArrangedSubview(title)
-        let hint = label("Drag files, folders, or artifacts onto the menu-bar icon.")
-        root.addArrangedSubview(hint)
+
+        let dropZone = PanelDropZone(frame: .zero)
+        dropZone.onDrop = { [weak self] paths in self?.handle(paths: paths) }
+        dropZone.onPick = { [weak self] in self?.pickInputs() }
+        dropZone.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        dropZone.heightAnchor.constraint(equalToConstant: 64).isActive = true
+        root.addArrangedSubview(dropZone)
 
         // mode + output
         root.addArrangedSubview(label("COMPRESSION", bold: true))
@@ -381,7 +454,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         statusLine.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         statusLine.textColor = .secondaryLabelColor
+        statusLine.lineBreakMode = .byWordWrapping
+        statusLine.maximumNumberOfLines = 0
+        statusLine.cell?.wraps = true
+        statusLine.cell?.isScrollable = false
+        statusLine.preferredMaxLayoutWidth = 288
+        statusLine.widthAnchor.constraint(equalToConstant: 288).isActive = true
         statusLine.stringValue = "ready — \(smashPath())"
+        statusLine.toolTip = statusLine.stringValue
         root.addArrangedSubview(statusLine)
 
         let quit = NSButton(title: "Quit smash", target: NSApp, action: #selector(NSApplication.terminate(_:)))
@@ -420,6 +500,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if p.runModal() == .OK, let u = p.url {
             ud.set(u.path, forKey: "outdir")
             outLabel.stringValue = u.path
+        }
+    }
+    func pickInputs() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true
+        p.canChooseFiles = true
+        p.allowsMultipleSelection = true
+        p.prompt = "Smash"
+        if p.runModal() == .OK {
+            handle(paths: p.urls.map { $0.path })
         }
     }
     @objc func installMCP() {
