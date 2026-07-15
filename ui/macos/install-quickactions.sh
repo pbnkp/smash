@@ -10,8 +10,9 @@
 #   Smash Selected Text  — selected text → smash -s (any app)
 set -euo pipefail
 SVC="$HOME/Library/Services"
-SMASH="$HOME/bin/smash"
+SMASH="${SMASH_BIN:-$HOME/bin/smash}"
 mkdir -p "$SVC"
+[ -x "$SMASH" ] || { echo "smash is not executable at $SMASH" >&2; exit 2; }
 
 # emit a file-input Quick Action bundle: $1=name  $2=shell-body
 mk_file_action() {
@@ -61,7 +62,7 @@ PLIST
   <key>workflowMetaData</key><dict>
     <key>serviceInputTypeIdentifier</key><string>com.apple.Automator.fileSystemObject</string>
     <key>serviceOutputTypeIdentifier</key><string>com.apple.Automator.nothing</string>
-    <key>serviceProcessesInput</key><integer>0</integer>
+    <key>serviceProcessesInput</key><integer>1</integer>
     <key>workflowTypeIdentifier</key><string>com.apple.Automator.servicesMenu</string>
   </dict>
 </dict></plist>
@@ -98,7 +99,7 @@ PLIST
       <key>ActionName</key><string>Run Shell Script</string>
       <key>ActionParameters</key><dict>
         <key>COMMAND_STRING</key><string>$body</string>
-        <key>inputMethod</key><integer>1</integer>
+        <key>inputMethod</key><integer>0</integer>
         <key>shell</key><string>/bin/bash</string>
       </dict>
       <key>BundleIdentifier</key><string>com.apple.Automator.RunShellScript</string>
@@ -117,12 +118,21 @@ WFLOW
   echo "installed: $name.workflow"
 }
 
-# Bodies read paths from stdin (inputMethod=1 → the workflow pipes items in,
-# one per line). Output lands beside each input (smash default).
-mk_file_action "Smash"              "export B64_OUTDIR=\"\$HOME/smashes\"; while IFS= read -r f; do \"$SMASH\" -q \"\$f\"; done"
-mk_file_action "Smash (semantic)"   "export B64_OUTDIR=\"\$HOME/smashes\"; while IFS= read -r f; do \"$SMASH\" --ai -q \"\$f\"; done"
-mk_file_action "Restore (smash -d)" "export B64_OUTDIR=\"\$HOME/smashes\"; while IFS= read -r f; do \"$SMASH\" -q -d \"\$f\"; done"
+# File inputs use argv (inputMethod=1), preserving whitespace and even newline
+# characters in Finder filenames. Text uses stdin (inputMethod=0).
+mk_file_action "Smash"              "export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" -q \"\$f\"; done"
+mk_file_action "Smash (semantic)"   "export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" --ai -q \"\$f\"; done"
+mk_file_action "Restore (smash -d)" "export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" -q -d \"\$f\"; done"
 mk_text_action "Smash Selected Text" "\"$SMASH\" -q -s \"\$(cat)\""
 
+for w in "$SVC/Smash.workflow" "$SVC/Smash (semantic).workflow" \
+         "$SVC/Restore (smash -d).workflow" "$SVC/Smash Selected Text.workflow"; do
+  plutil -lint "$w/Contents/Info.plist" "$w/Contents/document.wflow" >/dev/null
+  touch "$w"
+done
+
+# Refresh the Services database. -flush removes stale entries left behind by
+# older partial installs; -update immediately discovers all four workflows.
+/System/Library/CoreServices/pbs -flush 2>/dev/null || true
 /System/Library/CoreServices/pbs -update 2>/dev/null || true
-echo "registered via pbs -update"
+echo "registered 4 Finder/Services actions via pbs"

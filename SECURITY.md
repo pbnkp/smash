@@ -14,13 +14,16 @@ the terminal.**
   stdout+stderr while encoding files whose names and contents contain OSC/CSI
   sequences.*
 - **Inert, non-executable artifacts.** smash contains no `eval`; it never
-  sources or executes payload bytes. Artifacts and restored files are written
-  mode `0600`. The manifest states this contract inside every artifact.
+  sources or executes payload bytes. Artifacts and single restored files are
+  written mode `0600`. Directory restores preserve safe original modes; this
+  does not make the encoded artifact executable.
 - **Pure-ASCII artifacts.** Whatever the source bytes were — binary,
   encrypted, escape-laden — the artifact is printable ASCII (manifest +
   base64), safe for cat, clipboards, chat, and LLM/agent file readers.
-- **Traversal-safe restore.** `.dtar` extraction refuses archive members with
-  absolute paths or `..` components before `tar x` runs.
+- **Staged, permission-safe restore.** `.dtar` extraction refuses absolute or
+  parent-traversal members, unsafe symlinks, special nodes, and hard links.
+  It extracts privately, never restores archived ownership, and strips only
+  set-ID regular-file bits and unsafe world-write bits before the final copy.
 - **Typo guard over silent fallback.** A mostly-real file list with one missing
   name dies naming it; nothing is silently re-interpreted as prose.
 - **Secret hygiene (`--ai-api`).** API keys are passed to `curl` via `-K
@@ -58,6 +61,9 @@ the terminal.**
   request-size cap; concurrency cap; fixed-window rate limit; per-op timeouts;
   `GET`→405. *Verified: 401 on missing/wrong token, 405 on GET, no CORS header,
   non-loopback bind refused, supplied token not logged.*
+- **Compressed transport.** HTTP accepts standard gzip request bodies and
+  negotiates gzip responses. The request cap is enforced on decompressed JSON,
+  preventing compressed-body expansion attacks. stdio framing stays standard.
 
 ## Web/PWA
 

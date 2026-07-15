@@ -23,7 +23,11 @@ func smashPath() -> String {
     for c in cands where FileManager.default.isExecutableFile(atPath: c) { return c }
     return "smash"
 }
-func mcpPath() -> String { home("bin/smash-mcp") }
+func mcpPath() -> String {
+    let cands = [home("bin/smash-mcp"), home(".local/bin/smash-mcp"),
+                 "/opt/homebrew/bin/smash-mcp", "/usr/local/bin/smash-mcp"]
+    return cands.first { FileManager.default.isExecutableFile(atPath: $0) } ?? home("bin/smash-mcp")
+}
 
 // ---------- Keychain ----------
 func keychainSet(_ account: String, _ value: String) -> Bool {
@@ -149,12 +153,22 @@ final class DropView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
+        wantsLayer = true
     }
     required init?(coder: NSCoder) { nil }
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+        return sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) ? .copy : []
+    }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    override func draggingExited(_ sender: NSDraggingInfo?) { layer?.backgroundColor = NSColor.clear.cgColor }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
+        defer { layer?.backgroundColor = NSColor.clear.cgColor }
+        let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
         if urls.isEmpty { return false }
         onDrop?(urls.map { $0.path })
         return true
@@ -193,10 +207,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         popover.behavior = .transient
         popover.contentViewController = makeSettingsVC()
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
+
+        let launchFiles = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
+        if !launchFiles.isEmpty {
+            DispatchQueue.main.async { self.handle(paths: Array(launchFiles)) }
+        }
 
         if CommandLine.arguments.contains("--show") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.showPopover() }
         }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let files = urls.filter { $0.isFileURL }.map { $0.path }
+        if !files.isEmpty { handle(paths: files) }
+    }
+
+    @objc func smashFiles(_ pboard: NSPasteboard, userData: String,
+                          error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        let urls = pboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        guard !urls.isEmpty else {
+            error.pointee = "Smash received no file URLs." as NSString
+            return
+        }
+        handle(paths: urls.map { $0.path })
     }
 
     @objc func togglePopover() {

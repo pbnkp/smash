@@ -10,7 +10,7 @@
 ```
 brew tap pbnkp/smash
 brew install smash
-smash -V            # -> smash v5.0
+smash -V            # -> smash v5.1
 ```
 Or in one line: `brew install pbnkp/smash/smash`.
 
@@ -48,18 +48,29 @@ claude mcp add -s user smash ~/bin/smash-mcp
 { "mcpServers": { "smash": { "command": "/Users/you/bin/smash-mcp" } } }
 ```
 Verify: ask the client to call `smash_capabilities` — it returns
-`smash v5.0`. Optional local HTTP transport:
+`smash v5.1`. Optional local HTTP transport:
 `smash-mcp -http 127.0.0.1:7461` (bearer token printed to stderr).
 
-## macOS app
+## macOS package (recommended)
 ```
-cp -R Smash.app ~/Applications/        # or run ui/macos/build-app.sh
-open ~/Applications/Smash.app
+ui/macos/build-pkg.sh dist-mac/Smash-5.1.pkg
+open dist-mac/Smash-5.1.pkg
 ```
-Menu-bar icon (`archivebox`). Drag files/folders/artifacts onto it, or click
-for settings. First launch of an ad-hoc/Developer-ID app not notarized may need
-right-click → Open (Gatekeeper). Install Finder actions with
-`ui/macos/install-quickactions.sh`.
+The package installs `/Applications/Smash.app`, `/usr/local/bin/smash`,
+`/usr/local/bin/smash-mcp`, four Finder actions, and the Share extension.
+
+For a user-level custom install instead:
+```
+ui/macos/install-macos.sh
+```
+This installs into `~/Applications`, `~/bin`, and `~/Library/Services`.
+Remove either installation with `ui/macos/uninstall-macos.sh` (use `sudo` for
+a system package installation). Artifacts in `~/smashes` are preserved.
+
+The menu-bar icon accepts drops and opens settings on click. Finder exposes
+Smash under Quick Actions/Services and Open With; the system Share menu exposes
+the embedded Smash Share extension. A newly installed Share extension may
+need enabling once in System Settings → General → Login Items & Extensions.
 
 ## Web / PWA
 Static hosting — copy `ui/web/dist/` to any static host (or open

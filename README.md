@@ -122,8 +122,8 @@ Every artifact opens with an in-file manifest describing the contents
 before the data flow:
 
 ```
-# ==== SMASH ARTIFACT v5.0 ====
-# tool: smash v5.0 (sole author: pbnkp)
+# ==== SMASH ARTIFACT v5.1 ====
+# tool: smash v5.1 (sole author: pbnkp)
 # created: 2026-07-10T12:34:56Z | host: example-host
 # source: config.json | kind: file | bytes: 48234 | sha256: 9f2a...c41d
 # encoding: base64( xz( source ) ) | lossy: no
@@ -221,13 +221,16 @@ RULES:
   terminal (title changes, OSC-52 clipboard writes, cursor games).
 - **Artifacts are inert.** Payloads are data, never instructions: smash
   contains no `eval`, never sources or executes payload bytes, and writes
-  artifacts and restored files mode `0600` (never executable). The
-  manifest states this contract inside every artifact.
+  artifacts mode `0600` (never executable). Single decoded files are `0600`;
+  decoded directories preserve safe original modes. The manifest states the
+  inert-artifact contract inside every artifact.
 - **Pure-ASCII artifacts.** Whatever the source bytes were — binary,
   encrypted, escape-laden — the artifact is printable ASCII, safe for
   cat, clipboards, chat channels, and LLM/agent file readers.
-- **Traversal-safe directory restore.** `.dtar` extraction refuses
-  archive members with absolute paths or `..` components.
+- **Permission- and traversal-safe directory restore.** `.dtar` extraction
+  refuses absolute/`..` members, unsafe symlinks, special nodes, and hard
+  links. It preserves normal modes while stripping only dangerous set-ID and
+  non-sticky world-write bits; archived ownership is never applied.
 - **Typo guard over silent fallback.** A mostly-real file list with one
   missing name dies naming it; nothing gets silently encoded as prose.
 - **Temp hygiene.** Staged payloads, API keys, and stdin copies live in

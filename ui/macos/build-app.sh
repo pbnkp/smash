@@ -20,10 +20,22 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Smash</string>
   <key>CFBundleExecutable</key><string>smash-menubar</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>5.0</string>
-  <key>CFBundleVersion</key><string>5.0</string>
+  <key>CFBundleShortVersionString</key><string>5.1</string>
+  <key>CFBundleVersion</key><string>5.1</string>
   <key>LSUIElement</key><true/>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>CFBundleDocumentTypes</key><array><dict>
+    <key>CFBundleTypeName</key><string>Files and folders</string>
+    <key>CFBundleTypeRole</key><string>Viewer</string>
+    <key>LSHandlerRank</key><string>Alternate</string>
+    <key>LSItemContentTypes</key><array><string>public.item</string></array>
+  </dict></array>
+  <key>NSServices</key><array><dict>
+    <key>NSMenuItem</key><dict><key>default</key><string>Share to Smash</string></dict>
+    <key>NSMessage</key><string>smashFiles</string>
+    <key>NSSendFileTypes</key><array><string>public.item</string></array>
+    <key>NSTimeout</key><string>30000</string>
+  </dict></array>
   <key>NSHumanReadableCopyright</key><string>Copyright (c) 2026 pbnkp.</string>
 </dict></plist>
 PLIST
@@ -31,7 +43,7 @@ cp "$BIN" "$APP/Contents/MacOS/smash-menubar"
 chmod 755 "$APP/Contents/MacOS/smash-menubar"
 
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "NKPS MEDIA"; then
-  codesign --force --sign "$CERT" --identifier "$IDENT" "$APP"
+  codesign --force --options runtime --timestamp --sign "$CERT" --identifier "$IDENT" "$APP"
 else
   codesign --force --sign - --identifier "$IDENT" "$APP"
   echo "note: Developer ID cert not found — ad-hoc signed"

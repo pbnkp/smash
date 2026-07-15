@@ -4,6 +4,41 @@ All notable changes to smash are documented here.
 
 ---
 
+## v5.1 — 2026-07-15
+
+The permission-safe restore and complete macOS integration release.
+
+### Fixed
+- Directory restores preserve ordinary source modes instead of flattening
+  everything through the current umask. Extraction happens in a private
+  staging directory; archived uid/gid values are never applied.
+- Dangerous modes are narrowly sanitized: setuid/setgid regular files lose
+  those bits, world-writable regular files lose `o+w`, and non-sticky
+  world-writable directories lose `o+w`. Normal read/write/execute modes,
+  executable tools, setgid/sticky directories, and mtimes are preserved.
+- FreeBSD artifact hardening no longer relies on unsupported `chmod --`;
+  artifacts are explicitly verified mode `0600` on macOS and FreeBSD.
+- Menu-bar file drops use file-URL-only pasteboard reads and visible drag
+  feedback. The app also accepts Finder Open With and a native NSServices
+  provider instead of relying only on Automator.
+- Finder installer registers and validates all four Quick Actions, clearing
+  stale partial Service registrations first.
+
+### Added
+- MCP v1.2 HTTP transport accepts gzip request bodies and negotiates gzip
+  responses. The 64 MiB limit applies after decompression to block gzip bombs;
+  stdio remains standard uncompressed MCP JSON-RPC.
+- A sandboxed macOS Share extension, embedded in `Smash.app`, accepts files,
+  media, URLs, and text from the system Share menu.
+- Signed-app build, all-in-one `.pkg` builder, user-level custom installer,
+  and clean uninstaller. Package/custom installs include the app, CLI, MCP
+  helper, Share extension, and four Finder actions.
+
+### Security
+- Smash artifacts remain inert ASCII data: mode `0600`, never eval'd, sourced,
+  or executed. This restriction applies to the artifact, not to safe original
+  execute bits on a decoded directory tree.
+
 ## v5.0 — 2026-07-10
 
 The "many things in, one safe text file out" release.

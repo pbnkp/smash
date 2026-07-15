@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smash v5.0 - Unified Encode/Decode Payload Manager
+# smash v5.1 - Unified Encode/Decode Payload Manager
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
 # Host: dual — bernie (FreeBSD 12.1) + Mac (darwin). bash 3.2-safe.
 #
@@ -34,6 +34,19 @@
 #   - FIXES: operands after `--` are no longer silently dropped; -o now
 #     works on encode (dir or filename prefix); unique-name suffix keeps
 #     the .txt ending; -V/--version added.
+#
+# v5.1 — the "never touch live" release (2026-07-13, born from the bernie
+#   webroot incident):
+#   - WEBROOT/LIVE-MOUNT GUARD: artifacts are never written into web-served
+#     or live-mounted trees (public_html, ShellFish CloudStorage, htdocs,
+#     www roots). Auto output redirects to ~/smashes with a loud note;
+#     explicit -o into one refuses. Override: SMASH_ALLOW_UNSAFE_OUTDIR=1.
+#   - EXTRACTION GUARD: .dtar auto-extraction into a web-served/live dir
+#     refuses without the same override. Extraction preserves ordinary source
+#     modes, never restores archived ownership, and sanitizes only dangerous
+#     modes (set-ID files and non-sticky world-writable entries).
+#   - SOURCE-IMMUTABILITY SELF-CHECK: source dir mode is compared before and
+#     after encode; any drift screams. smash reads sources, never writes them.
 #   Full history: CHANGELOG.md
 # =============================================================================
 
@@ -41,7 +54,7 @@ set -euo pipefail
 umask 077
 IFS=$' \t\n'
 
-VERSION="5.0"
+VERSION="5.1"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -103,19 +116,21 @@ TMP_FINAL=""
 TMP_OUT=""
 TMP_TXT=""
 TMP_STDIN=""
+TMP_EXTRACT=""
 
 cleanup_all() {
   rm -f "${TMP_B64:-}" "${TMP_AI:-}" "${TMP_TAR:-}" \
         "${TMP_AF:-}" "${TMP_PAYLOAD:-}" "${TMP_CURLCFG:-}" "${TMP_FINAL:-}" \
         "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" 2>/dev/null
   [[ -z "${TMP_AIDIR:-}" ]] || rm -rf "$TMP_AIDIR"
+  [[ -z "${TMP_EXTRACT:-}" ]] || rm -rf "$TMP_EXTRACT"
   return 0
 }
 trap cleanup_all EXIT INT HUP TERM
 
 usage() {
   cat 1>&2 <<'EOF'
-smash v5.0 — encode/decode payload manager
+smash v5.1 — encode/decode payload manager
 
 usage:
   smash <file> [file|dir ...]     encode each operand (xz, default)
@@ -161,6 +176,8 @@ artifacts:
 
 env:
   B64_OUTDIR=/some/dir          default output directory
+  SMASH_ALLOW_UNSAFE_OUTDIR=1   permit artifacts/extraction inside web-served
+                                or live-mounted dirs (guarded since v5.1)
 
   --ai-api auto-detects from these (checked in order):
   B64_AI_URL=http://...         API endpoint (overrides auto-detect)
@@ -218,6 +235,38 @@ ensure_outdir() {
   fi
   [[ -w "$d" ]] || return 1
   return 0
+}
+
+# ---------------------------------------------------------------------------
+# v5.1 SAFETY GUARDS (2026-07-13; born from the bernie webroot incident).
+# Artifacts must never land in a web-served or live-mounted tree, and smash
+# must never mutate its input. Guards fire on encode output, -o, and .dtar
+# auto-extraction. Deliberate override: SMASH_ALLOW_UNSAFE_OUTDIR=1.
+# ---------------------------------------------------------------------------
+SMASH_UNSAFE_RE='public_html|/Library/CloudStorage/ShellFish/|htdocs|wwwroot|/usr/local/www/|/var/www/'
+SMASH_SAFE_FALLBACK="${HOME:-/tmp}/smashes"
+
+# real_dir: physical path of a dir (best effort; no readlink -f dependency).
+real_dir() { (cd -- "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+
+# is_unsafe_dir DIR: 0 when DIR resolves inside a web-served/live tree.
+is_unsafe_dir() {
+  local rp; rp="$(real_dir "$1")"
+  [[ "$rp" =~ $SMASH_UNSAFE_RE ]]
+}
+
+# guard_outdir DIR CONTEXT: echoes a safe output dir. When DIR is unsafe and
+# no override is set, redirects to $SMASH_SAFE_FALLBACK with a loud note.
+guard_outdir() {
+  local d="$1" ctx="${2:-output}"
+  if is_unsafe_dir "$d" && [[ "${SMASH_ALLOW_UNSAFE_OUTDIR:-0}" != "1" ]]; then
+    ensure_outdir "$SMASH_SAFE_FALLBACK" || die "cannot write safe outdir: $SMASH_SAFE_FALLBACK"
+    info 'smash: GUARD: %s dir is web-served/live (%s) -> artifact redirected to %s (override: SMASH_ALLOW_UNSAFE_OUTDIR=1)\n' \
+      "$ctx" "$(sn "$d")" "$(sn "$SMASH_SAFE_FALLBACK")"
+    printf '%s' "$SMASH_SAFE_FALLBACK"
+  else
+    printf '%s' "$d"
+  fi
 }
 
 # sha256 of a file via openssl (already a hard dependency; portable across
@@ -288,12 +337,83 @@ verify_artifact() {
 move_final() {
   local src="$1" dst="$2"
   if mv -f -- "$src" "$dst" 2>/dev/null; then
-    chmod -- 0600 "$dst" 2>/dev/null || true
+    case "$dst" in
+      -*) chmod 0600 "./$dst" 2>/dev/null || true ;;
+      *)  chmod 0600 "$dst" 2>/dev/null || true ;;
+    esac
     return 0
   fi
   cp -f -- "$src" "$dst"
   rm -f -- "$src"
-  chmod -- 0600 "$dst" 2>/dev/null || true
+  case "$dst" in
+    -*) chmod 0600 "./$dst" 2>/dev/null || true ;;
+    *)  chmod 0600 "$dst" 2>/dev/null || true ;;
+  esac
+}
+
+# safe_extract_dtar ARCHIVE DESTDIR
+#
+# The encoded artifact remains inert mode-0600 data. For directory restores,
+# extract first into a private staging directory, preserve ordinary archived
+# modes, sanitize only permissions that create a privilege/traversal risk, and
+# then overlay the sanitized tree into the requested destination. Archived
+# uid/gid values are never applied.
+safe_extract_dtar() {
+  local archive="$1" dest="$2" dangerous_count
+
+  # Device nodes, FIFOs, sockets and hard links do not belong in a portable
+  # payload restore. Regular files, directories and safe symlinks are allowed.
+  if tar tvf "$archive" 2>/dev/null | awk '
+      substr($1,1,1) !~ /^[-dl]$/ { bad=1 }
+      END { exit bad ? 0 : 1 }
+    '; then
+    die "refusing to extract: archive contains a special file or hard link"
+  fi
+
+  # A relative symlink may stay inside the restored tree; absolute targets and
+  # any target containing a parent traversal are rejected.
+  if tar tvf "$archive" 2>/dev/null | awk '
+      substr($1,1,1) == "l" {
+        target=$0
+        if (sub(/^.* -> /, "", target) == 0 ||
+            target ~ /^\// || target ~ /(^|\/)\.\.($|\/)/) bad=1
+      }
+      END { exit bad ? 0 : 1 }
+    '; then
+    die "refusing to extract: archive contains an unsafe symlink"
+  fi
+
+  TMP_EXTRACT="$(mktemp -d "${SMASH_TMP}/smash.extract.XXXXXX")"
+  chmod 0700 "$TMP_EXTRACT" 2>/dev/null || die "cannot secure extraction staging dir"
+
+  # Preserve the source modes in private staging, but never trust archived
+  # ownership. Nothing in staging is reachable by other users.
+  tar xpf "$archive" -C "$TMP_EXTRACT" --no-same-owner \
+    || die "tar extraction failed"
+
+  dangerous_count=$(
+    find "$TMP_EXTRACT" -type f \( -perm +6000 -o -perm +0002 \) -print 2>/dev/null
+    find "$TMP_EXTRACT" -type d -perm +0002 ! -perm +1000 -print 2>/dev/null
+  )
+  dangerous_count=$(printf '%s\n' "$dangerous_count" | awk 'NF {n++} END {print n+0}')
+
+  # Set-ID regular files can elevate privileges. World-writable regular files
+  # and non-sticky directories can be replaced by untrusted users. Only those
+  # bits are removed; read, execute, group, sticky-dir and all other modes stay.
+  find "$TMP_EXTRACT" -type f -perm +6000 -exec chmod u-s,g-s {} \; 2>/dev/null
+  find "$TMP_EXTRACT" -type f -perm +0002 -exec chmod o-w {} \; 2>/dev/null
+  find "$TMP_EXTRACT" -type d -perm +0002 ! -perm +1000 -exec chmod o-w {} \; 2>/dev/null
+
+  # Re-archive only the private, sanitized staging tree. This preserves its
+  # modes and mtimes while --no-same-owner keeps destination ownership safe.
+  tar cpf - -C "$TMP_EXTRACT" . \
+    | tar xpf - -C "$dest" --no-same-owner \
+    || die "sanitized directory restore failed"
+
+  rm -rf "$TMP_EXTRACT"; TMP_EXTRACT=""
+  if [[ "$dangerous_count" -gt 0 ]]; then
+    warn "sanitized dangerous permission bits on $dangerous_count restored entries"
+  fi
 }
 
 # write_manifest <out> <src_label> <kind> <bytes> <sha256> <ext_label> <lossy>
@@ -997,6 +1117,11 @@ resolve_encode_out() {
       OUTDIR="$(dirname -- "$OUT_PATH")"
       ensure_outdir "$OUTDIR" || die "cannot write to output dir: $(sn "$OUTDIR")"
     fi
+    # v5.1: an EXPLICIT -o into a web-served/live dir refuses rather than
+    # silently redirecting — the user stated intent, so make them mean it.
+    if is_unsafe_dir "$OUTDIR" && [[ "${SMASH_ALLOW_UNSAFE_OUTDIR:-0}" != "1" ]]; then
+      die "refusing -o into a web-served/live dir: $(sn "$OUTDIR") (deliberate? SMASH_ALLOW_UNSAFE_OUTDIR=1)"
+    fi
     return 0
   fi
   if [[ -n "${B64_OUTDIR:-}" ]]; then
@@ -1012,6 +1137,7 @@ resolve_encode_out() {
     ensure_outdir "$fallback" || die "cannot write to output dir"
     OUTDIR="$fallback"
   fi
+  OUTDIR="$(guard_outdir "$OUTDIR" "output")"
 }
 
 # ==========================================================================
@@ -1100,13 +1226,23 @@ encode_path() {
     OUTDIR="$(dirname -- "$input")"
     ensure_outdir "$OUTDIR" || OUTDIR="${HOME:-/tmp}/smashes"
     ensure_outdir "$OUTDIR" || die "cannot write to output dir"
+    OUTDIR="$(guard_outdir "$OUTDIR" "auto-output")"
+  fi
+
+  # v5.1: reading from a web-served/live tree is fine — note it once so the
+  # operator knows the artifact will not land there.
+  local in_dir="$input"
+  [[ -d "$input" ]] || in_dir="$(dirname -- "$input")"
+  if is_unsafe_dir "$in_dir"; then
+    info 'smash: NOTE: input lives on a web-served/live tree (%s) — read-only; artifact goes to a safe dir\n' "$(sn "$input")"
   fi
 
   if [[ -d "$input" ]]; then
     # --- Directory: optionally AI-compress text files, then tar + encode ---
-    local dir_parent dir_base
+    local dir_parent dir_base src_mode_before src_mode_after
     dir_parent="$(dirname -- "$input")"
     dir_base="$(basename -- "$input")"
+    src_mode_before="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
     TMP_TAR="$(mktemp "${SMASH_TMP}/smash.tar.XXXXXX.tar")"
 
     if [[ -n "$ai_fn" ]]; then
@@ -1131,6 +1267,12 @@ encode_path() {
     else
       info 'smash: tarring directory: %s\n' "$(sn "$input")"
       tar cf "$TMP_TAR" -C "$dir_parent" -- "$dir_base" || die "tar failed on: $(sn "$input")"
+    fi
+
+    # v5.1 source-immutability self-check: encode must never alter the source.
+    src_mode_after="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
+    if [[ "$src_mode_before" != "$src_mode_after" ]]; then
+      warn "WARNING: source dir mode changed during encode ($src_mode_before -> $src_mode_after) — THIS IS A smash BUG, report it"
     fi
 
     local tar_bytes
@@ -1213,6 +1355,12 @@ decode_one() {
     warn "note: $(sn "$name") restored as an empty file (source was empty)"
   fi
 
+  # v5.1: decoding a single file INTO a web-served/live dir stays allowed
+  # (deliberate restores) but is always called out.
+  if is_unsafe_dir "$(dirname -- "$out_path")"; then
+    info 'smash: NOTE: decoding into a web-served/live dir: %s\n' "$(sn "$out_path")"
+  fi
+
   move_final "$TMP_OUT" "$out_path"
   TMP_OUT=""
 
@@ -1221,13 +1369,19 @@ decode_one() {
     local extract_dir extracted_name
     extract_dir="$(dirname -- "$out_path")"
     extracted_name="$(basename -- "$out_path" .dtar)"
+    # v5.1: mass-overwrite into a live webroot must be deliberate.
+    if is_unsafe_dir "$extract_dir" && [[ "${SMASH_ALLOW_UNSAFE_OUTDIR:-0}" != "1" ]]; then
+      die "refusing to auto-extract a directory tar into a web-served/live dir: $(sn "$extract_dir") (deliberate? SMASH_ALLOW_UNSAFE_OUTDIR=1; artifact kept: $(sn "$out_path"))"
+    fi
     info 'smash: extracting directory to: %s/%s\n' "$(sn "$extract_dir")" "$(sn "$extracted_name")"
     # Harden: payloads may be untrusted. Reject any archive member that escapes
     # the extraction dir via an absolute path or a `..` traversal component.
     if tar tf "$out_path" 2>/dev/null | grep -Eq '^/|(^|/)\.\.(/|$)'; then
       die "refusing to extract: archive contains absolute or traversal paths"
     fi
-    tar xf "$out_path" -C "$extract_dir" || die "tar extraction failed"
+    # Preserve normal source permissions. Extraction is staged privately;
+    # ownership is not restored and only dangerous permission bits are removed.
+    safe_extract_dtar "$out_path" "$extract_dir"
     rm -f -- "$out_path"
     if [[ "$is_ai" -eq 1 ]]; then
       info 'decoded+extracted (ai-compacted, lossy): %s/%s\n' "$(sn "$extract_dir")" "$(sn "$extracted_name")"

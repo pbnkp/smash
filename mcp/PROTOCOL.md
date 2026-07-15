@@ -6,9 +6,9 @@ never runs a shell: it calls typed tools, and the server shells out to the
 canonical `smash` binary with **argv** (never a shell string), returning
 artifact **paths + metadata** — never raw content.
 
-- Version: `smash-mcp v1.1`
+- Version: `smash-mcp v1.2`
 - MCP protocol: `2025-06-18`
-- Engine: the `smash` CLI (v5.0) is the single source of truth. The server
+- Engine: the `smash` CLI (v5.1) is the single source of truth. The server
   produces byte-identical artifacts to the CLI because it *is* the CLI.
 - Language: Go, written to the **Go 1.13** language level (`io/ioutil`, no
   generics, no post-1.13 stdlib). Builds clean on go1.22 (macOS arm64 +
@@ -82,6 +82,10 @@ smash-mcp -http 127.0.0.1:7461
   it cross-origin.
 - Request-size cap (64 MiB), concurrency cap (8 in-flight), fixed-window rate
   limit (120 req / 10 s), per-op timeouts, `GET`→405.
+- **Compression proxy:** requests may use `Content-Encoding: gzip`; clients
+  that send `Accept-Encoding: gzip` receive gzip for responses of at least
+  1 KiB. The 64 MiB cap is enforced after decompression. stdio remains plain
+  newline JSON-RPC because custom compressed framing would break MCP clients.
 
 One JSON-RPC request per POST to `/mcp`. `/health` returns a plain-text
 liveness line.
@@ -120,6 +124,7 @@ claude mcp add -s user smash ~/bin/smash-mcp
 smash-mcp -http 127.0.0.1:7461 -token "$SMASH_MCP_TOKEN"
 curl -s http://127.0.0.1:7461/mcp \
   -H "Authorization: Bearer $SMASH_MCP_TOKEN" \
+  -H "Accept-Encoding: gzip" --compressed \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
        "params":{"name":"smash_capabilities","arguments":{}}}'
 ```
@@ -136,10 +141,11 @@ than content dumps.
 
 ## Evidence (this build)
 
-- Protocol battery: **22/22** — 8 tools, stdio + HTTP, auth (401 on
+- Protocol battery includes 8 tools, stdio + HTTP, gzip request/response,
+  decompressed-size enforcement, auth (401 on
   missing/wrong token), 405 on GET, no CORS, non-loopback refused, token not
   logged, path traversal rejected, malformed JSON-RPC → parse error, unknown
   method → -32601, unknown tool → isError, duplicate id both answered,
   notification-only stays silent, no content dumps in the protocol channel.
-- In-client: `smash_probe`/`smash_capabilities` answered live through Claude
-  Code's own MCP client against `smash v5.0`.
+- In-client: `smash_capabilities` answers through standard MCP clients against
+  `smash v5.1`; no custom client codec is required.
