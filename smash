@@ -54,6 +54,12 @@ set -euo pipefail
 umask 077
 IFS=$' \t\n'
 
+# Finder Quick Actions, LaunchServices, and menu-bar apps start with a minimal
+# PATH that omits Homebrew/MacPorts. Prefer known system/package-manager paths
+# so required codecs remain discoverable without relying on a shell profile.
+PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME:-/tmp}/bin:${PATH:-}"
+export PATH
+
 VERSION="5.2"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is

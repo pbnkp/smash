@@ -17,6 +17,14 @@ The readable-artifact and clipboard-drop release.
   Clipboard content streams directly to Smash and is not staged as plaintext
   in a temporary file.
 
+### Fixed
+- Finder Quick Actions, the menu app, and the Share extension now locate xz,
+  gzip, and zstd under Homebrew, MacPorts, and standard system paths even when
+  LaunchServices supplies a restricted `PATH`.
+- **Smash Selected Text** streams Automator input over stdin instead of putting
+  the entire selection in one shell argument, avoiding large-text `ARG_MAX`
+  failures.
+
 ---
 
 ## v5.1 — 2026-07-15

@@ -11,6 +11,7 @@
 set -euo pipefail
 SVC="$HOME/Library/Services"
 SMASH="${SMASH_BIN:-$HOME/bin/smash}"
+SAFE_PATH='export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/bin:${PATH:-}"'
 mkdir -p "$SVC"
 [ -x "$SMASH" ] || { echo "smash is not executable at $SMASH" >&2; exit 2; }
 
@@ -120,10 +121,12 @@ WFLOW
 
 # File inputs use argv (inputMethod=1), preserving whitespace and even newline
 # characters in Finder filenames. Text uses stdin (inputMethod=0).
-mk_file_action "Smash"              "export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" -q \"\$f\"; done"
-mk_file_action "Smash (semantic)"   "export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" --ai -q \"\$f\"; done"
-mk_file_action "Restore (smash -d)" "export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" -q -d \"\$f\"; done"
-mk_text_action "Smash Selected Text" "\"$SMASH\" -q -s \"\$(cat)\""
+mk_file_action "Smash"              "$SAFE_PATH; export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" -q \"\$f\"; done"
+mk_file_action "Smash (semantic)"   "$SAFE_PATH; export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" --ai -q \"\$f\"; done"
+mk_file_action "Restore (smash -d)" "$SAFE_PATH; export B64_OUTDIR=\"\$HOME/smashes\"; for f in \"\$@\"; do \"$SMASH\" -q -d \"\$f\"; done"
+# Automator already provides selected text on stdin. Stream it directly so a
+# multi-megabyte selection never crosses the OS command-line argument limit.
+mk_text_action "Smash Selected Text" "$SAFE_PATH; \"$SMASH\" -q -o \"\$HOME/smashes/Selected Text.txt\" -"
 
 for w in "$SVC/Smash.workflow" "$SVC/Smash (semantic).workflow" \
          "$SVC/Restore (smash -d).workflow" "$SVC/Smash Selected Text.workflow"; do
