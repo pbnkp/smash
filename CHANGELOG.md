@@ -24,6 +24,19 @@ The readable-artifact and clipboard-drop release.
 - **Smash Selected Text** streams Automator input over stdin instead of putting
   the entire selection in one shell argument, avoiding large-text `ARG_MAX`
   failures.
+- The menu popover is capped to the visible screen and scrolls internally;
+  Recent no longer stretches it into an oversized off-screen column.
+- MCP setup now replaces stale same-name Claude registrations, protocol-tests
+  the canonical Go server, and configures Claude Code and Claude Desktop to use
+  the same `~/bin/smash-mcp` binary.
+
+### Changed
+- The drop target recognizes text, files, folders, and Smash artifacts while
+  dragging, opens and expands automatically, and uses varied grab/catch
+  animations (disabled when macOS Reduce Motion is enabled).
+- MCP setup distinguishes private local stdio from authenticated public HTTPS.
+  The app can test a remote endpoint and open Claude's connector settings
+  without implying that a local install is reachable from Claude's cloud.
 
 ---
 

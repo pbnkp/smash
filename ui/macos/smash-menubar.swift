@@ -12,6 +12,7 @@
 // network layer with Claude (claude mcp add) — no API key involved.
 
 import AppKit
+import QuartzCore
 import Security
 
 let kService = "com.pbnkp.smash"
@@ -55,6 +56,41 @@ func keychainGet(_ account: String) -> String {
 
 // ---------- smash runner ----------
 struct JobResult { let ok: Bool; let line: String; let artifact: String? }
+
+enum DropKind {
+    case text, file, files, folder, artifact
+
+    var prompt: String {
+        switch self {
+        case .text: return "I found text — drop it and I’ll grab it"
+        case .file: return "I found a file — feed it to Smash"
+        case .files: return "I found files — drop the whole stack"
+        case .folder: return "I found a folder — drop it right here"
+        case .artifact: return "Smash artifact found — drop to Restore"
+        }
+    }
+}
+
+func dropKind(_ pasteboard: NSPasteboard) -> DropKind? {
+    let urls = pasteboard.readObjects(
+        forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
+    ) as? [URL] ?? []
+    if !urls.isEmpty {
+        if urls.contains(where: { $0.lastPathComponent.range(of: #"\.smash(?:\.\d+)?\.txt$"#, options: .regularExpression) != nil || $0.lastPathComponent.contains(".b64.") }) {
+            return .artifact
+        }
+        if urls.count > 1 { return .files }
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: urls[0].path, isDirectory: &isDir), isDir.boolValue { return .folder }
+        return .file
+    }
+    if let text = pasteboard.string(forType: .string), !text.isEmpty { return .text }
+    return nil
+}
+
+final class FlippedStackView: NSStackView {
+    override var isFlipped: Bool { true }
+}
 
 final class Engine {
     static func run(args: [String], env extra: [String: String] = [:], input: Data? = nil,
@@ -186,6 +222,8 @@ final class Engine {
 final class DropView: NSView {
     var onDrop: (([String]) -> Void)?
     var onTextDrop: ((String) -> Void)?
+    var onDragKind: ((DropKind?) -> Void)?
+    var onCatch: (() -> Void)?
     var onClick: (() -> Void)?
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -194,17 +232,22 @@ final class DropView: NSView {
     }
     required init?(coder: NSCoder) { nil }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
-        let pb = sender.draggingPasteboard
-        let valid = pb.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
-            || pb.string(forType: .string) != nil
-        return valid ? .copy : []
+        let kind = dropKind(sender.draggingPasteboard)
+        layer?.backgroundColor = kind == nil ? NSColor.clear.cgColor : NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+        onDragKind?(kind)
+        return kind == nil ? [] : .copy
     }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
-    override func draggingExited(_ sender: NSDraggingInfo?) { layer?.backgroundColor = NSColor.clear.cgColor }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        dropKind(sender.draggingPasteboard) == nil ? [] : .copy
+    }
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        layer?.backgroundColor = NSColor.clear.cgColor
+        onDragKind?(nil)
+    }
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        defer { layer?.backgroundColor = NSColor.clear.cgColor }
+        defer { layer?.backgroundColor = NSColor.clear.cgColor; onDragKind?(nil) }
+        onCatch?()
         let urls = sender.draggingPasteboard.readObjects(
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
@@ -225,7 +268,9 @@ final class PanelDropZone: NSView {
     var onDrop: (([String]) -> Void)?
     var onTextDrop: ((String) -> Void)?
     var onPick: (() -> Void)?
+    var onExpanded: ((Bool) -> Void)?
     private let label = NSTextField(labelWithString: "Drop files, folders, or text to Smash\nDrop Smash artifacts to Restore\nOr click to choose")
+    private let idleText = "Drop files, folders, or text to Smash\nDrop Smash artifacts to Restore\nOr click to choose"
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -252,6 +297,51 @@ final class PanelDropZone: NSView {
     }
     required init?(coder: NSCoder) { nil }
 
+    private var reducedMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    func react(to kind: DropKind?) {
+        guard let kind = kind else {
+            label.stringValue = idleText
+            highlight(false)
+            onExpanded?(false)
+            return
+        }
+        label.stringValue = kind.prompt
+        highlight(true)
+        onExpanded?(true)
+        playRandomGrabAnimation()
+    }
+
+    func catchDrop() {
+        label.stringValue = "Got it — smashing…"
+        guard !reducedMotion else { return }
+        let chomp = CAKeyframeAnimation(keyPath: "transform.scale")
+        chomp.values = [1.0, 0.91, 1.08, 1.0]
+        chomp.keyTimes = [0, 0.35, 0.7, 1]
+        chomp.duration = 0.32
+        layer?.add(chomp, forKey: "smash-chomp")
+    }
+
+    private func playRandomGrabAnimation() {
+        guard !reducedMotion else { return }
+        layer?.removeAnimation(forKey: "smash-grab")
+        let animation: CAKeyframeAnimation
+        switch Int.random(in: 0..<3) {
+        case 0:
+            animation = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+            animation.values = [0, -0.035, 0.035, -0.018, 0]
+        case 1:
+            animation = CAKeyframeAnimation(keyPath: "transform.scale")
+            animation.values = [1.0, 1.055, 0.985, 1.025, 1.0]
+        default:
+            animation = CAKeyframeAnimation(keyPath: "transform.translation.y")
+            animation.values = [0, 5, -2, 3, 0]
+        }
+        animation.duration = 0.46
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer?.add(animation, forKey: "smash-grab")
+    }
+
     private func highlight(_ active: Bool) {
         layer?.borderWidth = active ? 2 : 1
         layer?.borderColor = (active ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
@@ -261,18 +351,18 @@ final class PanelDropZone: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let pb = sender.draggingPasteboard
-        let valid = pb.canReadObject(
-            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
-        ) || pb.string(forType: .string) != nil
-        highlight(valid)
-        return valid ? .copy : []
+        let kind = dropKind(sender.draggingPasteboard)
+        react(to: kind)
+        return kind == nil ? [] : .copy
     }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
-    override func draggingExited(_ sender: NSDraggingInfo?) { highlight(false) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        dropKind(sender.draggingPasteboard) == nil ? [] : .copy
+    }
+    override func draggingExited(_ sender: NSDraggingInfo?) { react(to: nil) }
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        defer { highlight(false) }
+        defer { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.react(to: nil) } }
+        catchDrop()
         let urls = sender.draggingPasteboard.readObjects(
             forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
         ) as? [URL] ?? []
@@ -301,6 +391,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var outLabel = NSTextField(labelWithString: "")
     var statusLine = NSTextField(labelWithString: "")
     var resultsStack = NSStackView()
+    weak var panelDropZone: PanelDropZone?
+    var dropZoneHeight: NSLayoutConstraint?
+    var remoteMCPField = NSTextField()
+    var remoteMCPTokenField = NSSecureTextField()
+    var mcpStateLabel = NSTextField(labelWithString: "Local: not checked\nEverywhere: HTTPS endpoint not configured")
+    weak var settingsRoot: NSStackView?
+    weak var settingsScroll: NSScrollView?
 
     func applicationDidFinishLaunching(_ n: Notification) {
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -312,11 +409,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             dv.autoresizingMask = [.width, .height]
             dv.onDrop = { [weak self] paths in self?.handle(paths: paths) }
             dv.onTextDrop = { [weak self] text in self?.handle(text: text) }
+            dv.onDragKind = { [weak self] kind in
+                guard let self = self else { return }
+                if kind != nil && !self.popover.isShown { self.showPopover() }
+                self.panelDropZone?.react(to: kind)
+            }
+            dv.onCatch = { [weak self] in self?.panelDropZone?.catchDrop() }
             dv.onClick = { [weak self] in self?.togglePopover() }
             b.addSubview(dv)
         }
         popover.behavior = .transient
         popover.contentViewController = makeSettingsVC()
+        DispatchQueue.global().async {
+            let ok = self.verifyLocalMCP()
+            DispatchQueue.main.async {
+                self.mcpStateLabel.stringValue = ok
+                    ? "Local: Smash MCP protocol ✓\nEverywhere: add and test an authenticated HTTPS URL"
+                    : "Local: unavailable — click Connect / Repair This Mac\nEverywhere: HTTPS endpoint not configured"
+            }
+        }
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
 
@@ -377,7 +488,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func finish(results rs: [JobResult]) {
-        self.results = (rs + self.results).prefix(6).map { $0 }
+        self.results = (rs + self.results).prefix(4).map { $0 }
         self.refreshResults()
         let okAll = rs.allSatisfy { $0.ok } && !rs.isEmpty
         self.setStatus(okAll ? "done — \(rs.count) artifact(s)" : "finished with errors")
@@ -394,6 +505,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusLine.toolTip = s
         statusLine.setAccessibilityLabel(s)
         statusLine.invalidateIntrinsicContentSize()
+        resizeSettingsDocument()
+    }
+
+    func resizeSettingsDocument() {
+        guard let root = settingsRoot, let scroll = settingsScroll else { return }
+        root.layoutSubtreeIfNeeded()
+        let height = max(1, root.fittingSize.height)
+        root.setFrameSize(NSSize(width: 320, height: height))
+        scroll.hasVerticalScroller = height > scroll.contentSize.height
     }
 
     func refreshResults() {
@@ -420,6 +540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             resultsStack.addArrangedSubview(row)
         }
+        resizeSettingsDocument()
     }
 
     @objc func reveal(_ sender: NSButton) {
@@ -431,7 +552,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // ---------- settings UI ----------
     func makeSettingsVC() -> NSViewController {
         let vc = NSViewController()
-        let root = NSStackView()
+        let root = FlippedStackView()
+        settingsRoot = root
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 10
@@ -449,11 +571,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         root.addArrangedSubview(title)
 
         let dropZone = PanelDropZone(frame: .zero)
+        panelDropZone = dropZone
         dropZone.onDrop = { [weak self] paths in self?.handle(paths: paths) }
         dropZone.onTextDrop = { [weak self] text in self?.handle(text: text) }
         dropZone.onPick = { [weak self] in self?.pickInputs() }
         dropZone.widthAnchor.constraint(equalToConstant: 288).isActive = true
-        dropZone.heightAnchor.constraint(equalToConstant: 76).isActive = true
+        dropZoneHeight = dropZone.heightAnchor.constraint(equalToConstant: 76)
+        dropZoneHeight?.isActive = true
+        dropZone.onExpanded = { [weak self, weak root] expanded in
+            guard let self = self else { return }
+            self.dropZoneHeight?.constant = expanded ? 104 : 76
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.22
+                root?.animator().layoutSubtreeIfNeeded()
+            }
+            DispatchQueue.main.async { self.resizeSettingsDocument() }
+        }
         root.addArrangedSubview(dropZone)
 
         let clipboardBtn = NSButton(title: "Smash Clipboard Text", target: self, action: #selector(smashClipboard))
@@ -504,12 +637,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         root.addArrangedSubview(keyField)
         root.addArrangedSubview(label("Keys never touch disk — Keychain (this device only)."))
 
-        // subscription / MCP network layer
-        root.addArrangedSubview(label("SUBSCRIPTION AI — NO KEY", bold: true))
-        root.addArrangedSubview(label("Your Claude subscription can drive smash directly\nthrough the MCP network layer instead of an API key."))
-        let mcpBtn = NSButton(title: "Install AI Network Layer (MCP)", target: self, action: #selector(installMCP))
+        // MCP: local stdio and public HTTPS are distinct connection paths.
+        root.addArrangedSubview(label("MCP CONNECTIONS", bold: true))
+        root.addArrangedSubview(label("This Mac uses private stdio. Claude web/mobile needs\npublic HTTPS + OAuth; other clients may use bearer auth."))
+        let mcpBtn = NSButton(title: "Connect / Repair This Mac", target: self, action: #selector(installMCP))
         mcpBtn.bezelStyle = .rounded
         root.addArrangedSubview(mcpBtn)
+
+        remoteMCPField.placeholderString = "https://your-host.example/mcp"
+        remoteMCPField.stringValue = ud.string(forKey: "remoteMCPURL") ?? ""
+        remoteMCPField.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        remoteMCPField.target = self; remoteMCPField.action = #selector(saveRemoteMCP)
+        root.addArrangedSubview(remoteMCPField)
+
+        remoteMCPTokenField.placeholderString = "bearer token (non-OAuth clients) → Keychain"
+        remoteMCPTokenField.target = self; remoteMCPTokenField.action = #selector(saveRemoteToken)
+        root.addArrangedSubview(remoteMCPTokenField)
+
+        let remoteRow = NSStackView()
+        let testRemote = NSButton(title: "Test HTTPS", target: self, action: #selector(testRemoteMCP))
+        let openConnectors = NSButton(title: "Claude Connectors…", target: self, action: #selector(openClaudeConnectors))
+        testRemote.bezelStyle = .rounded; testRemote.controlSize = .small
+        openConnectors.bezelStyle = .rounded; openConnectors.controlSize = .small
+        remoteRow.addArrangedSubview(testRemote); remoteRow.addArrangedSubview(openConnectors)
+        root.addArrangedSubview(remoteRow)
+
+        mcpStateLabel.font = .monospacedSystemFont(ofSize: 9.5, weight: .regular)
+        mcpStateLabel.textColor = .secondaryLabelColor
+        mcpStateLabel.maximumNumberOfLines = 0
+        mcpStateLabel.preferredMaxLayoutWidth = 288
+        mcpStateLabel.widthAnchor.constraint(equalToConstant: 288).isActive = true
+        root.addArrangedSubview(mcpStateLabel)
 
         // results
         root.addArrangedSubview(label("RECENT", bold: true))
@@ -534,11 +692,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         quit.bezelStyle = .inline
         root.addArrangedSubview(quit)
 
-        for v in [modePop, urlField, modelField, keyField] as [NSView] {
+        for v in [modePop, urlField, modelField, keyField, remoteMCPField, remoteMCPTokenField] as [NSView] {
             v.widthAnchor.constraint(equalToConstant: 288).isActive = true
         }
         root.widthAnchor.constraint(equalToConstant: 320).isActive = true
-        vc.view = root
+        root.layoutSubtreeIfNeeded()
+        let contentHeight = max(1, root.fittingSize.height)
+        root.frame = NSRect(x: 0, y: 0, width: 320, height: contentHeight)
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 900
+        let viewportHeight = min(contentHeight, max(520, min(720, screenHeight - 120)))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 336, height: viewportHeight))
+        settingsScroll = scroll
+        scroll.documentView = root
+        scroll.hasVerticalScroller = contentHeight > viewportHeight
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        vc.view = scroll
         return vc
     }
 
@@ -585,47 +755,138 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         handle(text: text)
     }
-    @objc func installMCP() {
-        setStatus("installing network layer…")
-        DispatchQueue.global().async {
-            var msg = ""
-            if !FileManager.default.isExecutableFile(atPath: mcpPath()) {
-                msg = "smash-mcp binary missing at ~/bin/smash-mcp — build it from the repo (mcp/smash-mcp) first."
-            } else {
-                // locate claude CLI
-                let cands = [home(".local/bin/claude"), "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
-                let claude = cands.first { FileManager.default.isExecutableFile(atPath: $0) }
-                if let claude = claude {
-                    func runClaude(_ args: [String]) -> (Int32, String) {
-                        let p = Process()
-                        p.executableURL = URL(fileURLWithPath: claude)
-                        p.arguments = args
-                        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
-                        do { try p.run() } catch { return (127, "") }
-                        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                        p.waitUntilExit()
-                        return (p.terminationStatus, out)
-                    }
-                    // `claude mcp add` exits 1 when the server is already
-                    // registered, which is success from the user's chair —
-                    // check registration first instead of reporting failure.
-                    if runClaude(["mcp", "get", "smash"]).0 == 0 {
-                        msg = "network layer already installed — Claude can call smash (no API key)."
-                    } else {
-                        let (rc, out) = runClaude(["mcp", "add", "-s", "user", "smash", mcpPath()])
-                        if rc == 0 {
-                            msg = "network layer registered — Claude can now call smash (no API key)."
-                        } else if out.contains("already exists") {
-                            msg = "network layer already installed — Claude can call smash (no API key)."
-                        } else {
-                            msg = "claude mcp add failed — run: claude mcp add -s user smash ~/bin/smash-mcp"
-                        }
-                    }
+
+    @objc func saveRemoteMCP() {
+        ud.set(remoteMCPField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "remoteMCPURL")
+    }
+
+    @objc func saveRemoteToken() {
+        if keychainSet("mcp-remote", remoteMCPTokenField.stringValue) {
+            remoteMCPTokenField.stringValue = ""
+            setStatus("remote MCP token saved to Keychain")
+        } else { setStatus("could not save remote MCP token") }
+    }
+
+    @objc func openClaudeConnectors() {
+        let value = remoteMCPField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !value.isEmpty {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(value, forType: .string)
+            setStatus("HTTPS MCP URL copied — paste it into Claude Custom Connector")
+        }
+        if let url = URL(string: "https://claude.ai/settings/connectors") { NSWorkspace.shared.open(url) }
+    }
+
+    @objc func testRemoteMCP() {
+        let value = remoteMCPField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value), url.scheme?.lowercased() == "https" else {
+            mcpStateLabel.stringValue = "Everywhere: enter a public https://…/mcp URL"
+            setStatus("remote MCP requires HTTPS")
+            return
+        }
+        saveRemoteMCP()
+        mcpStateLabel.stringValue = "Everywhere: testing HTTPS…"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        let token = keychainGet("mcp-remote")
+        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        request.httpBody = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Smash Menu","version":"5.2"}}}"#.data(using: .utf8)
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            DispatchQueue.main.async {
+                if error == nil && (200...299).contains(code) && (body.contains("smash-mcp") || body.contains("serverInfo")) {
+                    self.mcpStateLabel.stringValue = "Everywhere: HTTPS ✓ MCP initialize succeeded"
+                    self.setStatus("remote HTTPS MCP is reachable")
+                } else if code == 401 {
+                    self.mcpStateLabel.stringValue = "Everywhere: HTTPS reached; authentication failed (401)"
+                    self.setStatus("remote MCP needs the correct token or OAuth")
                 } else {
-                    msg = "claude CLI not found — run: claude mcp add -s user smash ~/bin/smash-mcp"
+                    self.mcpStateLabel.stringValue = "Everywhere: test failed (HTTP \(code))"
+                    self.setStatus(error?.localizedDescription ?? "remote MCP did not initialize")
                 }
             }
-            DispatchQueue.main.async { self.setStatus(msg) }
+        }.resume()
+    }
+
+    private func verifyLocalMCP() -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: mcpPath()) else { return false }
+        let p = Process(), input = Pipe(), output = Pipe()
+        p.executableURL = URL(fileURLWithPath: mcpPath())
+        p.standardInput = input; p.standardOutput = output; p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return false }
+        let probe = """
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Smash Menu","version":"5.2"}}}
+        {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+
+        """
+        input.fileHandleForWriting.write(Data(probe.utf8))
+        try? input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let text = String(data: data, encoding: .utf8) ?? ""
+        return p.terminationStatus == 0 && text.contains("smash-mcp") && text.contains("smash_batch")
+    }
+
+    private func installClaudeDesktopConfig() -> Bool {
+        let fm = FileManager.default
+        let dir = home("Library/Application Support/Claude")
+        let path = (dir as NSString).appendingPathComponent("claude_desktop_config.json")
+        do {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            var object: [String: Any] = [:]
+            if let data = fm.contents(atPath: path),
+               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { object = parsed }
+            var servers = object["mcpServers"] as? [String: Any] ?? [:]
+            servers["smash"] = ["command": mcpPath(), "args": []] as [String: Any]
+            object["mcpServers"] = servers
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+            return true
+        } catch { return false }
+    }
+
+    @objc func installMCP() {
+        setStatus("connecting local MCP…")
+        mcpStateLabel.stringValue = "Local: testing canonical Smash MCP…"
+        DispatchQueue.global().async {
+            guard self.verifyLocalMCP() else {
+                DispatchQueue.main.async {
+                    self.mcpStateLabel.stringValue = "Local: failed — canonical smash-mcp did not answer"
+                    self.setStatus("local MCP binary failed its initialize/tools test")
+                }
+                return
+            }
+            let desktopOK = self.installClaudeDesktopConfig()
+            let cands = [home(".local/bin/claude"), home(".local/wrappers/claude"), "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+            var codeOK = false
+            if let claude = cands.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+                func runClaude(_ args: [String]) -> (Int32, String) {
+                    let p = Process(), pipe = Pipe()
+                    p.executableURL = URL(fileURLWithPath: claude); p.arguments = args
+                    p.standardOutput = pipe; p.standardError = pipe
+                    do { try p.run() } catch { return (127, "") }
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
+                    return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+                }
+                let current = runClaude(["mcp", "get", "smash"])
+                if current.0 == 0 && !current.1.contains(mcpPath()) { _ = runClaude(["mcp", "remove", "smash", "-s", "user"]) }
+                if current.0 != 0 || !current.1.contains(mcpPath()) {
+                    _ = runClaude(["mcp", "add", "-s", "user", "smash", "--", mcpPath()])
+                }
+                let verified = runClaude(["mcp", "get", "smash"])
+                codeOK = verified.0 == 0 && verified.1.contains(mcpPath()) && verified.1.contains("Connected")
+            }
+            DispatchQueue.main.async {
+                let code = codeOK ? "Claude Code ✓" : "Claude Code not found/connected"
+                let desktop = desktopOK ? "Desktop config ✓ (restart Claude once)" : "Desktop config failed"
+                self.mcpStateLabel.stringValue = "Local: Smash MCP ✓ — \(code); \(desktop)\nEverywhere: add and test an authenticated HTTPS URL"
+                self.setStatus("local MCP repaired and protocol-tested")
+            }
         }
     }
 }

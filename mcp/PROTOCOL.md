@@ -90,6 +90,16 @@ smash-mcp -http 127.0.0.1:7461
 One JSON-RPC request per POST to `/mcp`. `/health` returns a plain-text
 liveness line.
 
+### HTTPS (remote clients)
+Claude web/mobile custom connectors and other cloud-brokered clients cannot
+reach localhost. Put the HTTP listener behind a publicly reachable HTTPS
+origin (or run it with `-allow-remote` plus TLS), preserve `POST /mcp`, and
+require OAuth for Claude custom connectors or another client-supported
+authentication mechanism for other clients. A browser
+challenge, private VPN address, self-signed certificate, or loopback URL is not
+a remote connector. Local stdio remains the preferred path for filesystem and
+clipboard access on one Mac.
+
 ## Configuration reference
 
 | Flag / env | Default | Meaning |
@@ -111,7 +121,7 @@ set.
 
 ### Claude Code
 ```
-claude mcp add -s user smash ~/bin/smash-mcp
+claude mcp add -s user smash -- ~/bin/smash-mcp
 ```
 
 ### Claude Desktop (`claude_desktop_config.json`)

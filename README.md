@@ -325,6 +325,16 @@ smash
 
 - **AI context compression:** Reduce token usage when feeding large documents into LLM context windows. Feed the compressed form — all facts preserved, prose overhead removed.
 - **Cross-system transport:** Encode large payloads for transport through channels with size limits (chat, clipboard, log entries, API bodies).
+
+## MCP connections
+
+`~/bin/smash-mcp` supports two intentionally different paths. Claude Code and
+Claude Desktop should launch it locally over stdio; this needs no URL or TLS.
+Claude web/mobile and other remote clients need a publicly reachable,
+authenticated HTTPS `/mcp` endpoint because their connection originates in the
+provider's cloud, not on this Mac. The menu app repairs/tests the local setup
+and separately tests an HTTPS endpoint rather than treating them as the same
+connection.
 - **Blob injection:** The encoding format (`/Td6WFo...` for XZ) is recognizable — useful when you need to identify smash-encoded content in logs or chat history.
 - **Archival:** Long-term storage of session artifacts, conversation histories, or project snapshots at dramatically reduced size.
 - **Local model compression:** Use a local Ollama/LM Studio model as the compression backend — full air-gapped operation, no data leaves your machine.
