@@ -27,8 +27,6 @@
 8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4  ./ui/web/dist/manifest.webmanifest
 8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4  ./ui/web/manifest.webmanifest
 95cee57f3dcc33bb293ddc402ee5b31ad714d8357c4c1f3c76b0bee462f471c1  ./README.md
-a5a8e995e59834b25b2bc23393cc05ca5bf1a5536d92e61ca35d9cde6745762d  ./ui/.DS_Store
-ad01b9d8c75c71a7c14466f343c2437f761ec450f5f1e02c63b02d0f869cd74e  ./.DS_Store
 ad76bf29ae4c7c0a46f53ffeb36be8245cb87af830d6fd987fcb729cf8d64540  ./ui/web/smash-web.app.js
 b1e0a3065fc2fe313fc6a20e304aa488576a091e1b68d931fa7c2615259db86f  ./ui/macos/sign-and-manifest.sh
 b47efc760ee1c855d1feefbc7beb0667a362503aade1f2449a6b698752dae603  ./.gitignore
