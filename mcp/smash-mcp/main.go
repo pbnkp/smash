@@ -8,11 +8,12 @@
 // artifact paths + metadata, never raw content.
 //
 // Transports:
-//   stdio (default)            — newline-delimited JSON-RPC 2.0 (MCP stdio)
-//   -http 127.0.0.1:PORT       — loopback JSON-RPC over HTTP POST /mcp.
-//                                Requires a bearer token (constant-time
-//                                compare). Non-loopback bind is refused
-//                                unless -allow-remote AND TLS are supplied.
+//
+//	stdio (default)            — newline-delimited JSON-RPC 2.0 (MCP stdio)
+//	-http 127.0.0.1:PORT       — loopback JSON-RPC over HTTP POST /mcp.
+//	                             Requires a bearer token (constant-time
+//	                             compare). Non-loopback bind is refused
+//	                             unless -allow-remote AND TLS are supplied.
 //
 // Go 1.13-compatible: uses io/ioutil, no generics, no post-1.13 stdlib APIs.
 // Target parity with bernie's Go 1.13.7.
@@ -21,6 +22,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -43,19 +45,20 @@ import (
 	"time"
 )
 
-const version = "1.1"
+const version = "1.2"
 const protocolVersion = "2025-06-18"
 
 // ---- limits (per-operation + transport) ----
 const (
-	maxHTTPBody      = 64 << 20  // 64 MiB request cap
-	maxConcurrent    = 8         // in-flight tool calls
-	rateWindow       = 10 * time.Second
-	rateMax          = 120       // requests per window (HTTP)
-	encodeTimeout    = 120 * time.Second
-	aiAPITimeout     = 300 * time.Second
-	maxBatchItems    = 256
-	maxInlineText    = 8 << 20 // 8 MiB inline text via temp file
+	maxHTTPBody     = 64 << 20 // 64 MiB request cap
+	maxConcurrent   = 8        // in-flight tool calls
+	rateWindow      = 10 * time.Second
+	rateMax         = 120 // requests per window (HTTP)
+	encodeTimeout   = 120 * time.Second
+	aiAPITimeout    = 300 * time.Second
+	maxBatchItems   = 256
+	maxInlineText   = 8 << 20 // 8 MiB inline text via temp file
+	minGzipResponse = 1024    // avoid expanding tiny JSON-RPC responses
 )
 
 var (
@@ -118,7 +121,7 @@ func schema(props map[string]interface{}, required ...string) map[string]interfa
 var tools = []toolDef{
 	{"smash_capabilities", "List smash version, engine binary, compression modes, artifact format, transports, and per-operation limits.", schema(map[string]interface{}{})},
 	{"smash_health", "Liveness/readiness: confirm the smash engine binary is present and executes. Returns ok|degraded|down with detail.", schema(map[string]interface{}{})},
-	{"smash_encode", "Losslessly compress+encode files/directories (or inline text) into smash artifacts (.b64.<ts>.txt: ASCII manifest + base64 payload). Returns artifact paths, sizes, sha256 of source; never raw content.",
+	{"smash_encode", "Losslessly compress+encode files/directories (or inline text) into readable .smash.txt artifacts (ASCII manifest + base64 payload). Returns artifact paths, sizes, sha256 of source; never raw content.",
 		schema(map[string]interface{}{
 			"paths":  obj("type", "array", "items", obj("type", "string"), "description", "files or directories to encode"),
 			"text":   obj("type", "string", "description", "inline text to encode instead of paths"),
@@ -560,13 +563,18 @@ func doCapabilities() (interface{}, error) {
 	}
 	sv, _, _ := runSmash(context.Background(), 10*time.Second, "-V")
 	return map[string]interface{}{
-		"mcp":          "smash-mcp v" + version,
-		"proto":        protocolVersion,
-		"engine":       strings.TrimSpace(sv),
-		"binary":       smashBin,
-		"losslessModes": modes,
-		"artifactFormat": ".<mode>.b64.<ts>.txt (ASCII manifest + base64 payload)",
-		"transports":   []string{"stdio", "http-loopback"},
+		"mcp":            "smash-mcp v" + version,
+		"proto":          protocolVersion,
+		"engine":         strings.TrimSpace(sv),
+		"binary":         smashBin,
+		"losslessModes":  modes,
+		"artifactFormat": "<source>.smash.txt (ASCII self-describing manifest + base64 payload)",
+		"transports":     []string{"stdio", "http-loopback", "http-gzip"},
+		"transportCompression": map[string]interface{}{
+			"http":                 "gzip request/response negotiation",
+			"stdio":                "identity (MCP-compatible)",
+			"minimumResponseBytes": minGzipResponse,
+		},
 		"limits": map[string]interface{}{
 			"maxBatchItems": maxBatchItems, "maxInlineTextBytes": maxInlineText,
 			"encodeTimeoutSec": int(encodeTimeout / time.Second), "aiApiTimeoutSec": int(aiAPITimeout / time.Second),
@@ -726,7 +734,7 @@ func handle(ctx context.Context, req *rpcRequest) *rpcResponse {
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
 			"serverInfo":      map[string]interface{}{"name": "smash-mcp", "version": version},
-			"instructions": "smash compresses/encodes any content into terminal-safe, LLM-readable .txt artifacts and restores them. Results are paths + metadata, never content dumps. Lossless: smash_encode/decode/verify. Lossy: smash_ai_compress. Use smash_batch for many jobs in one call.",
+			"instructions":    "smash compresses/encodes any content into terminal-safe, LLM-readable .txt artifacts and restores them. Results are paths + metadata, never content dumps. Lossless: smash_encode/decode/verify. Lossy: smash_ai_compress. Use smash_batch for many jobs in one call.",
 		}
 	case "notifications/initialized", "initialized", "notifications/cancelled":
 		return nil
@@ -794,6 +802,68 @@ type rateLimiter struct {
 	window time.Time
 }
 
+func acceptsGzip(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		name := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
+		if strings.EqualFold(name, "gzip") {
+			return true
+		}
+	}
+	return false
+}
+
+// readRPCBody accepts identity or gzip HTTP bodies and applies the size cap to
+// the decompressed JSON, preventing a small compressed request from expanding
+// past the MCP request limit.
+func readRPCBody(r *http.Request) ([]byte, int, error) {
+	var reader io.Reader = r.Body
+	encoding := strings.TrimSpace(strings.ToLower(r.Header.Get("Content-Encoding")))
+	switch encoding {
+	case "", "identity":
+	case "gzip":
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			return nil, http.StatusBadRequest, errors.New("invalid gzip request")
+		}
+		defer zr.Close()
+		reader = zr
+	default:
+		return nil, http.StatusUnsupportedMediaType, errors.New("unsupported content encoding")
+	}
+	body, err := ioutil.ReadAll(io.LimitReader(reader, maxHTTPBody+1))
+	if err != nil {
+		return nil, http.StatusBadRequest, errors.New("read error")
+	}
+	if len(body) > maxHTTPBody {
+		return nil, http.StatusRequestEntityTooLarge, errors.New("request too large")
+	}
+	return body, 0, nil
+}
+
+// writeRPC negotiates standard HTTP gzip without changing MCP JSON-RPC
+// semantics. stdio remains uncompressed because arbitrary framing there would
+// be incompatible with normal MCP clients.
+func writeRPC(w http.ResponseWriter, status int, value interface{}, useGzip bool) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		status = http.StatusInternalServerError
+		body = []byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"encode error"}}`)
+	}
+	body = append(body, '\n')
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Add("Vary", "Accept-Encoding")
+	if useGzip && len(body) >= minGzipResponse {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(status)
+		zw := gzip.NewWriter(w)
+		_, _ = zw.Write(body)
+		_ = zw.Close()
+		return
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
 func (r *rateLimiter) allow() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -842,10 +912,8 @@ func serveHTTP(addr, token string, allowRemote bool, certFile, keyFile string) e
 		return subtle.ConstantTimeCompare(sha(got), sha(tokenBytes)) == 1
 	}
 
-	writeErr := func(w http.ResponseWriter, code int, rpcCode int, msg string) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", Error: &rpcError{Code: rpcCode, Message: msg}})
+	writeErr := func(w http.ResponseWriter, r *http.Request, code int, rpcCode int, msg string) {
+		writeRPC(w, code, rpcResponse{JSONRPC: "2.0", Error: &rpcError{Code: rpcCode, Message: msg}}, acceptsGzip(r))
 	}
 
 	mux := http.NewServeMux()
@@ -859,36 +927,36 @@ func serveHTTP(addr, token string, allowRemote bool, certFile, keyFile string) e
 			return
 		}
 		if r.Method != http.MethodPost {
-			writeErr(w, http.StatusMethodNotAllowed, -32600, "POST only")
+			writeErr(w, r, http.StatusMethodNotAllowed, -32600, "POST only")
 			return
 		}
 		if !authOK(r) {
-			writeErr(w, http.StatusUnauthorized, -32001, "unauthorized")
+			writeErr(w, r, http.StatusUnauthorized, -32001, "unauthorized")
 			return
 		}
 		if !rl.allow() {
-			writeErr(w, http.StatusTooManyRequests, -32002, "rate limit exceeded")
+			writeErr(w, r, http.StatusTooManyRequests, -32002, "rate limit exceeded")
 			return
 		}
 		if r.ContentLength > maxHTTPBody {
-			writeErr(w, http.StatusRequestEntityTooLarge, -32003, "request too large")
+			writeErr(w, r, http.StatusRequestEntityTooLarge, -32003, "request too large")
 			return
 		}
-		body, err := ioutil.ReadAll(io.LimitReader(r.Body, maxHTTPBody))
+		body, bodyStatus, err := readRPCBody(r)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, -32700, "read error")
+			writeErr(w, r, bodyStatus, -32700, err.Error())
 			return
 		}
 		var req rpcRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeErr(w, http.StatusOK, -32700, "parse error")
+			writeErr(w, r, http.StatusOK, -32700, "parse error")
 			return
 		}
 		select {
 		case sem <- struct{}{}:
 			defer func() { <-sem }()
 		case <-time.After(30 * time.Second):
-			writeErr(w, http.StatusServiceUnavailable, -32004, "server busy")
+			writeErr(w, r, http.StatusServiceUnavailable, -32004, "server busy")
 			return
 		}
 		resp := handle(r.Context(), &req)
@@ -896,8 +964,7 @@ func serveHTTP(addr, token string, allowRemote bool, certFile, keyFile string) e
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		writeRPC(w, http.StatusOK, resp, acceptsGzip(r))
 	})
 
 	srv := &http.Server{

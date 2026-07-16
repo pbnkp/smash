@@ -8,7 +8,7 @@ CLI's runtime `xz`.
 The CLI is a single Bash script — nothing to build. Lint + smoke:
 ```
 bash -n smash            # syntax (bash 3.2-safe)
-./smash -V               # -> smash v5.0
+./smash -V               # -> smash v5.2
 ```
 Runtime deps: `openssl`, `xz`, `gzip` (all present on macOS/FreeBSD); `zstd`
 only for `-z`; `jq`+`curl` only for `--ai-api`.
@@ -20,7 +20,7 @@ post-1.13 stdlib). Builds on any Go ≥ 1.13.
 cd mcp/smash-mcp
 go vet ./...
 go build -trimpath -ldflags="-s -w" -o smash-mcp .
-./smash-mcp -V           # -> smash-mcp v1.1 (proto 2025-06-18)
+./smash-mcp -V           # -> smash-mcp v1.2 (proto 2025-06-18)
 ```
 - **Verified:** vet clean + build on go1.26 (macOS arm64) and go1.22.12
   (FreeBSD amd64). Language-level 1.13 compatibility is by construction
@@ -58,6 +58,18 @@ cd ui/macos
 - **SDK compatibility:** built against whatever `swiftc` is installed
   (`swiftc --version` to check); `LSMinimumSystemVersion` is 13.0. The CLI is
   always the fallback if the app can't run.
+
+Build the app plus embedded Share extension:
+```
+ui/macos/build-app.sh ~/Applications/Smash.app
+ui/macos/build-share-extension.sh ~/Applications/Smash.app
+```
+
+Build the all-in-one installer package (app, CLI, MCP, Share extension, and
+Finder actions):
+```
+ui/macos/build-pkg.sh dist-mac/Smash-5.2.pkg
+```
 
 ## Finder integration
 ```

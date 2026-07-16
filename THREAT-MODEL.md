@@ -30,14 +30,14 @@ the AI provider you configure, and the transport network beyond loopback.
 |---|---|---|---|
 | T1 | Terminal-escape injection via filename/content/provider body | All printed dynamic strings sanitized (control bytes stripped); content never printed | zero-ESC test (CLI); sanitizeErr (MCP) |
 | T2 | Payload executed/eval'd | No `eval`/`source`/exec of payload anywhere; artifacts mode 0600, non-exec | code audit; perms test |
-| T3 | Archive traversal (`../etc/x` in a `.dtar`) | Reject absolute/`..` members before `tar x` | dtar traversal test |
+| T3 | Archive traversal or privilege-bearing entries in a `.dtar` | Private staged extraction; reject absolute/`..`, unsafe links and special nodes; sanitize set-ID/world-write bits | dtar permission/traversal tests |
 | T4 | Path traversal / symlink escape via MCP paths | `EvalSymlinks` + approved-root containment; reject outside | MCP traversal test (rejected) |
 | T5 | Secret leak via `ps`/args | keys via `curl -K`/`-d @file`; Keychain on macOS; never argv | ai-api sentinel test (no leak) |
 | T6 | Secret residue after crash/interrupt | temp files trap-cleaned on EXIT/INT/HUP/TERM | interrupt test (0 residue) |
 | T7 | Provider DoS (timeout/oversize/malformed) | `curl --max-time`; oversize warning; strict response parse → die | ai-api matrix (all branches) |
 | T8 | Model runs arbitrary commands via MCP | argv-only, typed tools, no shell, no arbitrary flags | protocol battery |
 | T9 | Network attacker calls HTTP transport | loopback-default; bearer auth (constant-time); TLS off-loopback; CORS off; rate/size/concurrency caps | HTTP battery (401/405/refuse) |
-| T10 | Duplicate/malformed/oversized JSON-RPC | parse-error responses; per-request limits; notification stays silent | protocol battery |
+| T10 | Duplicate/malformed/oversized or gzip-bomb JSON-RPC | parse-error responses; decompressed-size limits; notification stays silent | protocol + gzip tests |
 | T11 | Served web bundle altered (CDN/host compromise) | SRI (sha384) on the module + strict CSP; SW hash-verify fails closed | SRI tamper test (blocked); SW map verified |
 | T12 | XSS via hostile filename/content in the web UI | untrusted values via `textContent`; `innerHTML` only static/numeric; strict CSP, no inline/eval | code audit; CSP |
 | T13 | Cache poisoning of the PWA | SW verifies SHA-256 at install, fails closed; never caches unverified bytes | logic static-verified; hashes runtime-correct |

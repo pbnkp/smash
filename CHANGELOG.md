@@ -4,6 +4,80 @@ All notable changes to smash are documented here.
 
 ---
 
+## v5.2 — 2026-07-15
+
+The readable-artifact and clipboard-drop release.
+
+### Added
+- Readable artifact names now use `<source>.smash.txt`, with `.2`, `.3`, etc.
+  only for collisions. Compression, time, source kind, and checksums remain in
+  the self-describing manifest; old timestamped `.b64` names still restore.
+- The integrated macOS drop zone accepts dragged text as well as files and
+  folders, and includes a **Smash Clipboard Text** button for large copied text.
+  Clipboard content streams directly to Smash and is not staged as plaintext
+  in a temporary file.
+
+### Fixed
+- Finder Quick Actions, the menu app, and the Share extension now locate xz,
+  gzip, and zstd under Homebrew, MacPorts, and standard system paths even when
+  LaunchServices supplies a restricted `PATH`.
+- **Smash Selected Text** streams Automator input over stdin instead of putting
+  the entire selection in one shell argument, avoiding large-text `ARG_MAX`
+  failures.
+- The menu popover is capped to the visible screen and scrolls internally;
+  Recent no longer stretches it into an oversized off-screen column.
+- MCP setup now replaces stale same-name Claude registrations, protocol-tests
+  the canonical Go server, and configures Claude Code and Claude Desktop to use
+  the same `~/bin/smash-mcp` binary.
+
+### Changed
+- The drop target recognizes text, files, folders, and Smash artifacts while
+  dragging, opens and expands automatically, and uses varied grab/catch
+  animations (disabled when macOS Reduce Motion is enabled).
+- MCP setup distinguishes private local stdio from authenticated public HTTPS.
+  The app can test a remote endpoint and open Claude's connector settings
+  without implying that a local install is reachable from Claude's cloud.
+
+---
+
+## v5.1 — 2026-07-15
+
+The permission-safe restore and complete macOS integration release.
+
+### Fixed
+- Directory restores preserve ordinary source modes instead of flattening
+  everything through the current umask. Extraction happens in a private
+  staging directory; archived uid/gid values are never applied.
+- Dangerous modes are narrowly sanitized: setuid/setgid regular files lose
+  those bits, world-writable regular files lose `o+w`, and non-sticky
+  world-writable directories lose `o+w`. Normal read/write/execute modes,
+  executable tools, setgid/sticky directories, and mtimes are preserved.
+- FreeBSD artifact hardening no longer relies on unsupported `chmod --`;
+  artifacts are explicitly verified mode `0600` on macOS and FreeBSD.
+- Menu-bar file drops use file-URL-only pasteboard reads and visible drag
+  feedback. The app also accepts Finder Open With and a native NSServices
+  provider instead of relying only on Automator.
+- Finder installer registers and validates all four Quick Actions, clearing
+  stale partial Service registrations first.
+- macOS package/custom upgrades remove the obsolete standalone
+  `com.boy.smash-dropzone` LaunchAgent now that dropping and restoring are
+  integrated into the main Smash menu app.
+
+### Added
+- MCP v1.2 HTTP transport accepts gzip request bodies and negotiates gzip
+  responses. The 64 MiB limit applies after decompression to block gzip bombs;
+  stdio remains standard uncompressed MCP JSON-RPC.
+- A sandboxed macOS Share extension, embedded in `Smash.app`, accepts files,
+  media, URLs, and text from the system Share menu.
+- Signed-app build, all-in-one `.pkg` builder, user-level custom installer,
+  and clean uninstaller. Package/custom installs include the app, CLI, MCP
+  helper, Share extension, and four Finder actions.
+
+### Security
+- Smash artifacts remain inert ASCII data: mode `0600`, never eval'd, sourced,
+  or executed. This restriction applies to the artifact, not to safe original
+  execute bits on a decoded directory tree.
+
 ## v5.0 — 2026-07-10
 
 The "many things in, one safe text file out" release.
