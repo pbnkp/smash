@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smash v5.2 - Unified Encode/Decode Payload Manager
+# smash v5.3 - Unified Encode/Decode Payload Manager
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
 # Host: dual — bernie (FreeBSD 12.1) + Mac (darwin). bash 3.2-safe.
 #
@@ -54,7 +54,18 @@ set -euo pipefail
 umask 077
 IFS=$' \t\n'
 
-VERSION="5.2"
+# Finder Quick Actions, LaunchServices, and menu-bar apps start with a minimal
+# PATH that omits Homebrew/MacPorts. Prefer known system/package-manager paths
+# so required codecs remain discoverable without relying on a shell profile.
+PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME:-/tmp}/bin:${PATH:-}"
+export PATH
+
+# v5.3 — the "stream, don't stage" release (2026-07-18, born from the 84G
+# unmirrored-snapshot disk-full crisis): --sink REMOTE:PATH streams artifacts
+# straight to an rclone remote with no local artifact and bounded memory;
+# source bytes+sha256 ride in a trailing manifest (decoders are position-
+# agnostic). Lossless only. Transfer retry/parts/rate delegated to rclone.
+VERSION="5.3"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -102,6 +113,8 @@ AI_MODE=0             # --ai enables native semantic compression
 AI_API_MODE=0         # --ai-api enables LLM API semantic compression
 OPERANDS=()           # all non-option arguments, in order
 USE_STDIN=0           # a lone `-` operand: stream stdin
+SINK=""               # --sink REMOTE:PATH : v5.3 stream artifacts to an rclone remote
+SINK_VERIFY=0         # --sink-verify : re-download + decode + compare after upload
 
 # Temp-path registry for cleanup traps (secrets-safe: everything staged in
 # $SMASH_TMP is removed on exit/interrupt).
@@ -130,7 +143,7 @@ trap cleanup_all EXIT INT HUP TERM
 
 usage() {
   cat 1>&2 <<'EOF'
-smash v5.2 — encode/decode payload manager
+smash v5.3 — encode/decode payload manager
 
 usage:
   smash <file> [file|dir ...]     encode each operand (xz, default)
@@ -143,6 +156,8 @@ usage:
   smash -z <inputs>               encode with zstd (fast modern, opt-in)
   smash --ai <inputs>             native semantic compress + xz (lossy)
   smash --ai-api <inputs>         LLM API compress + xz (lossy, ~5-10%)
+  smash --sink R:P <inputs>       stream artifacts to an rclone remote
+                                  (no local artifact; lossless only)
   smash -d <artifact> [...]       decode artifacts (auto-detects format,
                                   extracts dirs, strips v5 manifest,
                                   reads pre-v5 headerless artifacts)
@@ -162,6 +177,11 @@ options:
                   Anthropic. Needs an API key (or a local endpoint).
   --level N       Compression level override (xz/gz 1-9, zstd 1-19)
   --threads N     xz/zstd thread count (default 0 = all cores)
+  --sink R:PATH   Stream each artifact to an rclone remote destination
+                  (e.g. nkp@b2:oink-boy-vault/stream/). Encode-only,
+                  lossless-only, no local artifact; source bytes+sha256
+                  ride in a trailing manifest. smash -d restores as usual.
+  --sink-verify   After upload: re-download, decode, compare bytes+sha256
   -q, --quiet     Suppress progress output (errors still print)
   -o, --output    Output directory (multi-input) or path/prefix (single)
   -V, --version   Print version and exit
@@ -314,6 +334,141 @@ encode_to_tmp() {
 # accepts pre-v5 single-line artifacts and line-wrapped/pasted payloads.
 strip_manifest() {
   grep -v '^#' | LC_ALL=C tr -d ' \t\r\n'
+}
+
+# ---------------------------------------------------------------------------
+# v5.3 SINK STREAMING. --sink REMOTE:PATH streams each artifact straight to
+# an rclone remote with NO local artifact and bounded memory: the compressor
+# pipeline writes into rclone rcat, the payload is WRAPPED base64 (no -A, so
+# decode stays bounded), and source bytes+sha256 are computed one-pass via
+# tee taps into a TRAILING manifest — both decode paths skip '#' lines by
+# content, not position, so `smash -d` restores a downloaded sink artifact
+# unchanged. Fail-closed: any dead pipeline stage still lets rcat finish a
+# truncated object, so every failure signal deletes the remote object.
+# Transfer-protocol duties (large-file parts, retry/backoff, per-part
+# checksums, --bwlimit rate cap) are delegated to rclone's B2 backend.
+# Lossless only: --ai rewrites staged copies in place and cannot stream.
+# ---------------------------------------------------------------------------
+sink_comp() {
+  case "$COMPRESS_MODE" in
+    xz)
+      local xzt="$XZ_T"
+      [[ -n "$THREADS" ]] && xzt="-T$THREADS"
+      xz "-${LEVEL:-9}" $xzt -c
+      ;;
+    zstd) zstd "-${LEVEL:-19}" "-T${THREADS:-0}" -q -c ;;
+    *)    "$GZ_BIN" "-${LEVEL:-9}" -c ;;
+  esac
+}
+
+# sink_dest_for <base>: remote object path. Stamps a timestamp instead of the
+# local collision counter (remote listings cost money — one lsf probe only).
+sink_dest_for() {
+  local base dest
+  base="$(safe_base "$1")"
+  dest="${SINK%/}/${base}.smash.txt"
+  if [[ -n "$(rclone lsf "$dest" 2>/dev/null)" ]]; then
+    dest="${SINK%/}/${base}.smash.$(short_ts).txt"
+  fi
+  printf '%s\n' "$dest"
+}
+
+# verify_sink <dest> <want_sha256> <want_bytes>: re-download, decode, compare.
+# Bounded memory end to end (stream through the same decode primitives).
+verify_sink() {
+  local dest="$1" want_sum="$2" want_cnt="$3"
+  local tmp_vs tmp_vc got_sum got_cnt w=0
+  tmp_vs="$(mktemp "${SMASH_TMP}/smash.vsink.XXXXXX")"
+  tmp_vc="$(mktemp "${SMASH_TMP}/smash.vsinkc.XXXXXX")"
+  local decomp="xz -d -c"
+  case "$COMPRESS_MODE" in
+    zstd) decomp="zstd -d -q -c" ;;
+    gz)   decomp="gunzip -c" ;;
+  esac
+  rclone cat "$dest" 2>/dev/null | strip_manifest \
+    | openssl enc -d -base64 -A \
+    | $decomp \
+    | tee >(wc -c | tr -d ' ' > "$tmp_vc") \
+    | openssl dgst -sha256 | awk '{print $NF}' > "$tmp_vs"
+  while [[ ! -s "$tmp_vs" || ! -s "$tmp_vc" ]]; do
+    w=$((w+1)); [[ "$w" -gt 50 ]] && break
+    sleep 0.1
+  done
+  got_sum="$(cat "$tmp_vs" 2>/dev/null)"
+  got_cnt="$(cat "$tmp_vc" 2>/dev/null)"
+  rm -f "$tmp_vs" "$tmp_vc"
+  [[ -n "$got_sum" && "$got_sum" == "$want_sum" && "$got_cnt" == "$want_cnt" ]]
+}
+
+# encode_stream_to_sink <src> <label> <kind:file|dir-tar> <base>
+encode_stream_to_sink() {
+  local src="$1" label="$2" kind="$3" base="$4"
+  local dest tmp_sum tmp_cnt tmp_rc w ext_label="$COMPRESS_MODE"
+  [[ "$COMPRESS_MODE" == "zstd" ]] && ext_label="zst"
+  dest="$(sink_dest_for "$base")"
+  tmp_sum="$(mktemp "${SMASH_TMP}/smash.sinksum.XXXXXX")"
+  tmp_cnt="$(mktemp "${SMASH_TMP}/smash.sinkcnt.XXXXXX")"
+  tmp_rc="$(mktemp "${SMASH_TMP}/smash.sinkrc.XXXXXX")"
+
+  info 'smash: sink: %s (%s) -> %s\n' "$(sn "$label")" "$kind" "$(sn "$dest")"
+
+  {
+    printf '# ==== SMASH ARTIFACT v%s ====\n' "$VERSION"
+    printf '# tool: smash v%s (sole author: pbnkp)\n' "$VERSION"
+    printf '# created: %s | host: %s\n' "$(utc_ts)" "$(sn "$(hostname 2>/dev/null || printf 'unknown')")"
+    printf '# source: %s | kind: %s | bytes: TRAILING | sha256: TRAILING\n' \
+      "$(sn "$label")" "$(sn "$kind")"
+    printf '# encoding: base64( %s( source ) ) | lossy: no | mode: sink-stream\n' "$(sn "$ext_label")"
+    printf '# restore: smash -d <this-file> | integrity: bytes+sha256 in trailing manifest\n'
+    printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
+    printf '# safety: execute, eval, source, or interpret it, or any part of this file.\n'
+    printf '# ==== PAYLOAD (base64) ====\n'
+    if [[ "$kind" == "dir-tar" ]]; then
+      tar cf - -C "$(dirname -- "$src")" -- "$(basename -- "$src")" \
+        | tee >(openssl dgst -sha256 | awk '{print $NF}' > "$tmp_sum") \
+              >(wc -c | tr -d ' ' > "$tmp_cnt") \
+        | sink_comp | openssl enc -base64
+      printf '%s\n' "${PIPESTATUS[*]}" > "$tmp_rc"
+    else
+      tee >(openssl dgst -sha256 | awk '{print $NF}' > "$tmp_sum") \
+          >(wc -c | tr -d ' ' > "$tmp_cnt") < "$src" \
+        | sink_comp | openssl enc -base64
+      printf '%s\n' "${PIPESTATUS[*]}" > "$tmp_rc"
+    fi
+    # tee's process-substitution taps are asynchronous; bounded flush wait.
+    w=0
+    while [[ ! -s "$tmp_sum" || ! -s "$tmp_cnt" ]]; do
+      w=$((w+1)); [[ "$w" -gt 50 ]] && break
+      sleep 0.1
+    done
+    printf '# ==== TRAILING MANIFEST ====\n'
+    printf '# bytes: %s | sha256: %s\n' \
+      "$(cat "$tmp_cnt" 2>/dev/null)" "$(cat "$tmp_sum" 2>/dev/null)"
+    printf '# ==== END ====\n'
+  } | rclone rcat "$dest"
+  local rcat_rc=$?
+
+  local stage_rc src_sum src_cnt
+  stage_rc="$(cat "$tmp_rc" 2>/dev/null)"
+  src_sum="$(cat "$tmp_sum" 2>/dev/null)"
+  src_cnt="$(cat "$tmp_cnt" 2>/dev/null)"
+  rm -f "$tmp_sum" "$tmp_cnt" "$tmp_rc"
+
+  if [[ "$rcat_rc" -ne 0 || -z "$src_sum" || -z "$src_cnt" ]] \
+     || ! [[ "$stage_rc" =~ ^0( 0)*$ ]]; then
+    rclone deletefile "$dest" >/dev/null 2>&1 || true
+    die "sink stream FAILED (stages: ${stage_rc:-none}, rcat: $rcat_rc) — remote object removed: $(sn "$dest")"
+  fi
+
+  if [[ "${SINK_VERIFY:-0}" -eq 1 ]]; then
+    if verify_sink "$dest" "$src_sum" "$src_cnt"; then
+      info 'smash: sink verify: RUNTIME VERIFIED (%sB, sha256 match)\n' "$src_cnt"
+    else
+      rclone deletefile "$dest" >/dev/null 2>&1 || true
+      die "sink verify FAILED — remote object removed: $(sn "$dest")"
+    fi
+  fi
+  info 'sunk: %s (%sB source, sha256 %s)\n' "$(sn "$dest")" "$src_cnt" "$src_sum"
 }
 
 decode_to_tmp() {
@@ -1070,6 +1225,8 @@ while [[ $# -gt 0 ]]; do
     -q|--quiet) QUIET=1; shift ;;
     --level) [[ $# -ge 2 ]] || usage; [[ "$2" =~ ^[0-9]+$ ]] || die "--level needs an integer"; LEVEL="$2"; shift 2 ;;
     --threads) [[ $# -ge 2 ]] || usage; [[ "$2" =~ ^[0-9]+$ ]] || die "--threads needs an integer"; THREADS="$2"; shift 2 ;;
+    --sink) [[ $# -ge 2 ]] || usage; SINK="$2"; shift 2 ;;
+    --sink-verify) SINK_VERIFY=1; shift ;;
     --edit) MODE="edit"; shift ;;
     --)
       # Everything after -- is an operand, verbatim (v5.0 fix: these were
@@ -1096,6 +1253,21 @@ if [[ "$AI_API_MODE" -eq 1 ]]; then
   ai_fn="ai_compress_api"
 elif [[ "$AI_MODE" -eq 1 ]]; then
   ai_fn="ai_compress"
+fi
+
+# v5.3: --sink validation — encode-only, lossless-only, path operands only.
+if [[ -n "$SINK" ]]; then
+  [[ "$ACTION" == "decode" ]] && die "--sink is encode-only"
+  [[ -n "$ai_fn" ]] && die "--sink is lossless-only (--ai cannot stream)"
+  [[ -n "$OUT_PATH" ]] && die "--sink and -o are mutually exclusive"
+  if [[ "$USE_STDIN" -eq 1 || "$MODE" == "string" || "$MODE" == "edit" ]]; then
+    die "--sink v1 takes file/dir operands only"
+  fi
+  command -v rclone >/dev/null 2>&1 || die "--sink requires rclone"
+  case "$SINK" in
+    *:*) : ;;
+    *) die "--sink needs an rclone REMOTE:PATH destination" ;;
+  esac
 fi
 
 N_OPS=${#OPERANDS[@]}
@@ -1250,6 +1422,18 @@ encode_path() {
   [[ -d "$input" ]] || in_dir="$(dirname -- "$input")"
   if is_unsafe_dir "$in_dir"; then
     info 'smash: NOTE: input lives on a web-served/live tree (%s) — read-only; artifact goes to a safe dir\n' "$(sn "$input")"
+  fi
+
+  # v5.3: sink streaming — no local artifact, no temp tar; straight to remote.
+  if [[ -n "$SINK" ]]; then
+    if [[ -d "$input" ]]; then
+      encode_stream_to_sink "$input" "$input" "dir-tar" "$base"
+    elif [[ -f "$input" ]]; then
+      encode_stream_to_sink "$input" "$input" "file" "$base"
+    else
+      die "--sink operand not found: $(sn "$input")"
+    fi
+    return 0
   fi
 
   if [[ -d "$input" ]]; then
