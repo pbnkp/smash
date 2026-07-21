@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smash v5.0 - Unified Encode/Decode Payload Manager
+# smash v5.3 - Unified Encode/Decode Payload Manager
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
-# Host: dual — bernie (FreeBSD 12.1) + Mac (darwin). bash 3.2-safe.
+# Host: dual — FreeBSD 12.1 + macOS (darwin). bash 3.2-safe.
 #
 # Compression modes:
 #   xz       (default)  — lossless, excellent ratio
@@ -34,6 +34,19 @@
 #   - FIXES: operands after `--` are no longer silently dropped; -o now
 #     works on encode (dir or filename prefix); unique-name suffix keeps
 #     the .txt ending; -V/--version added.
+#
+# v5.1 — the "never touch live" release (2026-07-13, born from a live
+#   webroot incident):
+#   - WEBROOT/LIVE-MOUNT GUARD: artifacts are never written into web-served
+#     or live-mounted trees (public_html, ShellFish CloudStorage, htdocs,
+#     www roots). Auto output redirects to ~/smashes with a loud note;
+#     explicit -o into one refuses. Override: SMASH_ALLOW_UNSAFE_OUTDIR=1.
+#   - EXTRACTION GUARD: .dtar auto-extraction into a web-served/live dir
+#     refuses without the same override. Extraction preserves ordinary source
+#     modes, never restores archived ownership, and sanitizes only dangerous
+#     modes (set-ID files and non-sticky world-writable entries).
+#   - SOURCE-IMMUTABILITY SELF-CHECK: source dir mode is compared before and
+#     after encode; any drift screams. smash reads sources, never writes them.
 #   Full history: CHANGELOG.md
 # =============================================================================
 
@@ -41,7 +54,18 @@ set -euo pipefail
 umask 077
 IFS=$' \t\n'
 
-VERSION="5.0"
+# Finder Quick Actions, LaunchServices, and menu-bar apps start with a minimal
+# PATH that omits Homebrew/MacPorts. Prefer known system/package-manager paths
+# so required codecs remain discoverable without relying on a shell profile.
+PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME:-/tmp}/bin:${PATH:-}"
+export PATH
+
+# v5.3 — the "stream, don't stage" release (2026-07-18, born from the 84G
+# unmirrored-snapshot disk-full crisis): --sink REMOTE:PATH streams artifacts
+# straight to an rclone remote with no local artifact and bounded memory;
+# source bytes+sha256 ride in a trailing manifest (decoders are position-
+# agnostic). Lossless only. Transfer retry/parts/rate delegated to rclone.
+VERSION="5.3"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -89,6 +113,10 @@ AI_MODE=0             # --ai enables native semantic compression
 AI_API_MODE=0         # --ai-api enables LLM API semantic compression
 OPERANDS=()           # all non-option arguments, in order
 USE_STDIN=0           # a lone `-` operand: stream stdin
+SINK=""               # --sink REMOTE:PATH : v5.3 stream artifacts to an rclone remote
+SINK_VERIFY=0         # --sink-verify : re-download + decode + compare after upload
+ORIGIN=""             # --origin "<text>" : caller-supplied provenance
+ORIGIN_AUTO=0         # --origin-auto : also record cwd + invoking process
 
 # Temp-path registry for cleanup traps (secrets-safe: everything staged in
 # $SMASH_TMP is removed on exit/interrupt).
@@ -103,19 +131,21 @@ TMP_FINAL=""
 TMP_OUT=""
 TMP_TXT=""
 TMP_STDIN=""
+TMP_EXTRACT=""
 
 cleanup_all() {
   rm -f "${TMP_B64:-}" "${TMP_AI:-}" "${TMP_TAR:-}" \
         "${TMP_AF:-}" "${TMP_PAYLOAD:-}" "${TMP_CURLCFG:-}" "${TMP_FINAL:-}" \
         "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" 2>/dev/null
   [[ -z "${TMP_AIDIR:-}" ]] || rm -rf "$TMP_AIDIR"
+  [[ -z "${TMP_EXTRACT:-}" ]] || rm -rf "$TMP_EXTRACT"
   return 0
 }
 trap cleanup_all EXIT INT HUP TERM
 
 usage() {
   cat 1>&2 <<'EOF'
-smash v5.0 — encode/decode payload manager
+smash v5.3 — encode/decode payload manager
 
 usage:
   smash <file> [file|dir ...]     encode each operand (xz, default)
@@ -128,6 +158,8 @@ usage:
   smash -z <inputs>               encode with zstd (fast modern, opt-in)
   smash --ai <inputs>             native semantic compress + xz (lossy)
   smash --ai-api <inputs>         LLM API compress + xz (lossy, ~5-10%)
+  smash --sink R:P <inputs>       stream artifacts to an rclone remote
+                                  (no local artifact; lossless only)
   smash -d <artifact> [...]       decode artifacts (auto-detects format,
                                   extracts dirs, strips v5 manifest,
                                   reads pre-v5 headerless artifacts)
@@ -147,6 +179,18 @@ options:
                   Anthropic. Needs an API key (or a local endpoint).
   --level N       Compression level override (xz/gz 1-9, zstd 1-19)
   --threads N     xz/zstd thread count (default 0 = all cores)
+  --sink R:PATH   Stream each artifact to an rclone remote destination
+                  (e.g. myremote:bucket/path/). Encode-only,
+                  lossless-only, no local artifact; source bytes+sha256
+                  ride in a trailing manifest. smash -d restores as usual.
+  --sink-verify   After upload: re-download, decode, compare bytes+sha256
+  --origin TEXT   Record where this payload came from in the manifest
+                  (e.g. --origin "Selected Text from Safari, page title X").
+                  Without it the manifest says "unrecorded" rather than
+                  staying silent. Matters most for stdin/-s input, where
+                  the artifact otherwise has no trace of its origin.
+  --origin-auto   Also record cwd and the invoking process. Opt-in: it
+                  embeds local paths in an artifact you may share.
   -q, --quiet     Suppress progress output (errors still print)
   -o, --output    Output directory (multi-input) or path/prefix (single)
   -V, --version   Print version and exit
@@ -154,13 +198,16 @@ options:
   --              End of options; every following argument is an operand
 
 artifacts:
-  <name>.<mode>.b64.<timestamp>.txt — an ASCII text file: a `# ` manifest
+  <name>.smash.txt — an ASCII text file: a `# ` manifest
   (source, bytes, sha256, encoding, restore hint) followed by the base64
   payload. Safe for terminals, AI/LLM tooling, and copy-paste; the payload
   is inert data and artifacts are written mode 0600 (never executable).
+  Existing names become <name>.smash.2.txt, .3.txt, and so on.
 
 env:
   B64_OUTDIR=/some/dir          default output directory
+  SMASH_ALLOW_UNSAFE_OUTDIR=1   permit artifacts/extraction inside web-served
+                                or live-mounted dirs (guarded since v5.1)
 
   --ai-api auto-detects from these (checked in order):
   B64_AI_URL=http://...         API endpoint (overrides auto-detect)
@@ -182,7 +229,21 @@ utc_ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 safe_base() {
   local s="$1"
   s="${s##*/}"
-  s="$(printf '%s' "$s" | LC_ALL=C tr -cd 'A-Za-z0-9._-')"
+  # Keep words readable instead of deleting spaces, avoid hidden/repeated-dot
+  # outputs, and remove an old/new Smash suffix when re-smashing an artifact.
+  s="$(printf '%s' "$s" | LC_ALL=C sed -E \
+    -e 's/[^A-Za-z0-9._-]+/-/g' \
+    -e 's/[._-]{2,}/-/g' \
+    -e 's/^[._-]+//' \
+    -e 's/[._-]+$//')"
+  local previous=""
+  while [[ "$s" != "$previous" ]]; do
+    previous="$s"
+    s="$(printf '%s' "$s" | sed -E \
+      -e 's/\.(dtar\.)?(ai\.)?(xz|gz|zst)\.b64\.[0-9]{6}_[0-9]{6}(\.[0-9]+)?(\.txt)?$//' \
+      -e 's/\.smash(\.[0-9]+)?\.txt$//')"
+  done
+  s="$(printf '%.120s' "$s" | sed -E 's/[._-]+$//')"
   [[ -n "$s" ]] || s="data"
   printf '%s\n' "$s"
 }
@@ -197,15 +258,16 @@ pick_unique() {
   printf '%s\n' "$candidate"
 }
 
-# pick_outfile: build the artifact path. The collision counter goes BEFORE
-# the final .txt so the artifact always ends in an agent-readable extension.
+# pick_outfile: readable names put transport details in the manifest, not the
+# filename. The collision counter stays before .txt so that extension survives.
 pick_outfile() {
-  local outdir="$1" base="$2" ts="$3" ext="$4"
-  local candidate="${outdir}/${base}.${ext}.b64.${ts}.txt"
-  local n=0
+  local outdir="$1" base="$2"
+  base="$(safe_base "$base")"
+  local candidate="${outdir}/${base}.smash.txt"
+  local n=1
   while [[ -e "$candidate" ]]; do
     n=$((n+1))
-    candidate="${outdir}/${base}.${ext}.b64.${ts}.${n}.txt"
+    candidate="${outdir}/${base}.smash.${n}.txt"
   done
   printf '%s\n' "$candidate"
 }
@@ -218,6 +280,38 @@ ensure_outdir() {
   fi
   [[ -w "$d" ]] || return 1
   return 0
+}
+
+# ---------------------------------------------------------------------------
+# v5.1 SAFETY GUARDS (2026-07-13; born from a live webroot incident).
+# Artifacts must never land in a web-served or live-mounted tree, and smash
+# must never mutate its input. Guards fire on encode output, -o, and .dtar
+# auto-extraction. Deliberate override: SMASH_ALLOW_UNSAFE_OUTDIR=1.
+# ---------------------------------------------------------------------------
+SMASH_UNSAFE_RE='public_html|/Library/CloudStorage/ShellFish/|htdocs|wwwroot|/usr/local/www/|/var/www/'
+SMASH_SAFE_FALLBACK="${HOME:-/tmp}/smashes"
+
+# real_dir: physical path of a dir (best effort; no readlink -f dependency).
+real_dir() { (cd -- "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+
+# is_unsafe_dir DIR: 0 when DIR resolves inside a web-served/live tree.
+is_unsafe_dir() {
+  local rp; rp="$(real_dir "$1")"
+  [[ "$rp" =~ $SMASH_UNSAFE_RE ]]
+}
+
+# guard_outdir DIR CONTEXT: echoes a safe output dir. When DIR is unsafe and
+# no override is set, redirects to $SMASH_SAFE_FALLBACK with a loud note.
+guard_outdir() {
+  local d="$1" ctx="${2:-output}"
+  if is_unsafe_dir "$d" && [[ "${SMASH_ALLOW_UNSAFE_OUTDIR:-0}" != "1" ]]; then
+    ensure_outdir "$SMASH_SAFE_FALLBACK" || die "cannot write safe outdir: $SMASH_SAFE_FALLBACK"
+    info 'smash: GUARD: %s dir is web-served/live (%s) -> artifact redirected to %s (override: SMASH_ALLOW_UNSAFE_OUTDIR=1)\n' \
+      "$ctx" "$(sn "$d")" "$(sn "$SMASH_SAFE_FALLBACK")"
+    printf '%s' "$SMASH_SAFE_FALLBACK"
+  else
+    printf '%s' "$d"
+  fi
 }
 
 # sha256 of a file via openssl (already a hard dependency; portable across
@@ -249,6 +343,142 @@ encode_to_tmp() {
 # accepts pre-v5 single-line artifacts and line-wrapped/pasted payloads.
 strip_manifest() {
   grep -v '^#' | LC_ALL=C tr -d ' \t\r\n'
+}
+
+# ---------------------------------------------------------------------------
+# v5.3 SINK STREAMING. --sink REMOTE:PATH streams each artifact straight to
+# an rclone remote with NO local artifact and bounded memory: the compressor
+# pipeline writes into rclone rcat, the payload is WRAPPED base64 (no -A, so
+# decode stays bounded), and source bytes+sha256 are computed one-pass via
+# tee taps into a TRAILING manifest — both decode paths skip '#' lines by
+# content, not position, so `smash -d` restores a downloaded sink artifact
+# unchanged. Fail-closed: any dead pipeline stage still lets rcat finish a
+# truncated object, so every failure signal deletes the remote object.
+# Transfer-protocol duties (large-file parts, retry/backoff, per-part
+# checksums, --bwlimit rate cap) are delegated to rclone's B2 backend.
+# Lossless only: --ai rewrites staged copies in place and cannot stream.
+# ---------------------------------------------------------------------------
+sink_comp() {
+  case "$COMPRESS_MODE" in
+    xz)
+      local xzt="$XZ_T"
+      [[ -n "$THREADS" ]] && xzt="-T$THREADS"
+      xz "-${LEVEL:-9}" $xzt -c
+      ;;
+    zstd) zstd "-${LEVEL:-19}" "-T${THREADS:-0}" -q -c ;;
+    *)    "$GZ_BIN" "-${LEVEL:-9}" -c ;;
+  esac
+}
+
+# sink_dest_for <base>: remote object path. Stamps a timestamp instead of the
+# local collision counter (remote listings cost money — one lsf probe only).
+sink_dest_for() {
+  local base dest
+  base="$(safe_base "$1")"
+  dest="${SINK%/}/${base}.smash.txt"
+  if [[ -n "$(rclone lsf "$dest" 2>/dev/null)" ]]; then
+    dest="${SINK%/}/${base}.smash.$(short_ts).txt"
+  fi
+  printf '%s\n' "$dest"
+}
+
+# verify_sink <dest> <want_sha256> <want_bytes>: re-download, decode, compare.
+# Bounded memory end to end (stream through the same decode primitives).
+verify_sink() {
+  local dest="$1" want_sum="$2" want_cnt="$3"
+  local tmp_vs tmp_vc got_sum got_cnt w=0
+  tmp_vs="$(mktemp "${SMASH_TMP}/smash.vsink.XXXXXX")"
+  tmp_vc="$(mktemp "${SMASH_TMP}/smash.vsinkc.XXXXXX")"
+  local decomp="xz -d -c"
+  case "$COMPRESS_MODE" in
+    zstd) decomp="zstd -d -q -c" ;;
+    gz)   decomp="gunzip -c" ;;
+  esac
+  rclone cat "$dest" 2>/dev/null | strip_manifest \
+    | openssl enc -d -base64 -A \
+    | $decomp \
+    | tee >(wc -c | tr -d ' ' > "$tmp_vc") \
+    | openssl dgst -sha256 | awk '{print $NF}' > "$tmp_vs"
+  while [[ ! -s "$tmp_vs" || ! -s "$tmp_vc" ]]; do
+    w=$((w+1)); [[ "$w" -gt 50 ]] && break
+    sleep 0.1
+  done
+  got_sum="$(cat "$tmp_vs" 2>/dev/null)"
+  got_cnt="$(cat "$tmp_vc" 2>/dev/null)"
+  rm -f "$tmp_vs" "$tmp_vc"
+  [[ -n "$got_sum" && "$got_sum" == "$want_sum" && "$got_cnt" == "$want_cnt" ]]
+}
+
+# encode_stream_to_sink <src> <label> <kind:file|dir-tar> <base>
+encode_stream_to_sink() {
+  local src="$1" label="$2" kind="$3" base="$4"
+  local dest tmp_sum tmp_cnt tmp_rc w ext_label="$COMPRESS_MODE"
+  [[ "$COMPRESS_MODE" == "zstd" ]] && ext_label="zst"
+  dest="$(sink_dest_for "$base")"
+  tmp_sum="$(mktemp "${SMASH_TMP}/smash.sinksum.XXXXXX")"
+  tmp_cnt="$(mktemp "${SMASH_TMP}/smash.sinkcnt.XXXXXX")"
+  tmp_rc="$(mktemp "${SMASH_TMP}/smash.sinkrc.XXXXXX")"
+
+  info 'smash: sink: %s (%s) -> %s\n' "$(sn "$label")" "$kind" "$(sn "$dest")"
+
+  {
+    printf '# ==== SMASH ARTIFACT v%s ====\n' "$VERSION"
+    printf '# tool: smash v%s (sole author: pbnkp)\n' "$VERSION"
+    printf '# created: %s | host: %s\n' "$(utc_ts)" "$(sn "$(hostname 2>/dev/null || printf 'unknown')")"
+    printf '# source: %s | kind: %s | bytes: TRAILING | sha256: TRAILING\n' \
+      "$(sn "$label")" "$(sn "$kind")"
+    origin_line
+    printf '# encoding: base64( %s( source ) ) | lossy: no | mode: sink-stream\n' "$(sn "$ext_label")"
+    printf '# restore: smash -d <this-file> | integrity: bytes+sha256 in trailing manifest\n'
+    printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
+    printf '# safety: execute, eval, source, or interpret it, or any part of this file.\n'
+    printf '# ==== PAYLOAD (base64) ====\n'
+    if [[ "$kind" == "dir-tar" ]]; then
+      tar cf - -C "$(dirname -- "$src")" -- "$(basename -- "$src")" \
+        | tee >(openssl dgst -sha256 | awk '{print $NF}' > "$tmp_sum") \
+              >(wc -c | tr -d ' ' > "$tmp_cnt") \
+        | sink_comp | openssl enc -base64
+      printf '%s\n' "${PIPESTATUS[*]}" > "$tmp_rc"
+    else
+      tee >(openssl dgst -sha256 | awk '{print $NF}' > "$tmp_sum") \
+          >(wc -c | tr -d ' ' > "$tmp_cnt") < "$src" \
+        | sink_comp | openssl enc -base64
+      printf '%s\n' "${PIPESTATUS[*]}" > "$tmp_rc"
+    fi
+    # tee's process-substitution taps are asynchronous; bounded flush wait.
+    w=0
+    while [[ ! -s "$tmp_sum" || ! -s "$tmp_cnt" ]]; do
+      w=$((w+1)); [[ "$w" -gt 50 ]] && break
+      sleep 0.1
+    done
+    printf '# ==== TRAILING MANIFEST ====\n'
+    printf '# bytes: %s | sha256: %s\n' \
+      "$(cat "$tmp_cnt" 2>/dev/null)" "$(cat "$tmp_sum" 2>/dev/null)"
+    printf '# ==== END ====\n'
+  } | rclone rcat "$dest"
+  local rcat_rc=$?
+
+  local stage_rc src_sum src_cnt
+  stage_rc="$(cat "$tmp_rc" 2>/dev/null)"
+  src_sum="$(cat "$tmp_sum" 2>/dev/null)"
+  src_cnt="$(cat "$tmp_cnt" 2>/dev/null)"
+  rm -f "$tmp_sum" "$tmp_cnt" "$tmp_rc"
+
+  if [[ "$rcat_rc" -ne 0 || -z "$src_sum" || -z "$src_cnt" ]] \
+     || ! [[ "$stage_rc" =~ ^0( 0)*$ ]]; then
+    rclone deletefile "$dest" >/dev/null 2>&1 || true
+    die "sink stream FAILED (stages: ${stage_rc:-none}, rcat: $rcat_rc) — remote object removed: $(sn "$dest")"
+  fi
+
+  if [[ "${SINK_VERIFY:-0}" -eq 1 ]]; then
+    if verify_sink "$dest" "$src_sum" "$src_cnt"; then
+      info 'smash: sink verify: RUNTIME VERIFIED (%sB, sha256 match)\n' "$src_cnt"
+    else
+      rclone deletefile "$dest" >/dev/null 2>&1 || true
+      die "sink verify FAILED — remote object removed: $(sn "$dest")"
+    fi
+  fi
+  info 'sunk: %s (%sB source, sha256 %s)\n' "$(sn "$dest")" "$src_cnt" "$src_sum"
 }
 
 decode_to_tmp() {
@@ -288,12 +518,121 @@ verify_artifact() {
 move_final() {
   local src="$1" dst="$2"
   if mv -f -- "$src" "$dst" 2>/dev/null; then
-    chmod -- 0600 "$dst" 2>/dev/null || true
+    case "$dst" in
+      -*) chmod 0600 "./$dst" 2>/dev/null || true ;;
+      *)  chmod 0600 "$dst" 2>/dev/null || true ;;
+    esac
     return 0
   fi
   cp -f -- "$src" "$dst"
   rm -f -- "$src"
-  chmod -- 0600 "$dst" 2>/dev/null || true
+  case "$dst" in
+    -*) chmod 0600 "./$dst" 2>/dev/null || true ;;
+    *)  chmod 0600 "$dst" 2>/dev/null || true ;;
+  esac
+}
+
+# safe_extract_dtar ARCHIVE DESTDIR
+#
+# The encoded artifact remains inert mode-0600 data. For directory restores,
+# extract first into a private staging directory, preserve ordinary archived
+# modes, sanitize only permissions that create a privilege/traversal risk, and
+# then overlay the sanitized tree into the requested destination. Archived
+# uid/gid values are never applied.
+safe_extract_dtar() {
+  local archive="$1" dest="$2" dangerous_count
+
+  # Device nodes, FIFOs, sockets and hard links do not belong in a portable
+  # payload restore. Regular files, directories and safe symlinks are allowed.
+  if tar tvf "$archive" 2>/dev/null | awk '
+      substr($1,1,1) !~ /^[-dl]$/ { bad=1 }
+      END { exit bad ? 0 : 1 }
+    '; then
+    die "refusing to extract: archive contains a special file or hard link"
+  fi
+
+  # A relative symlink may stay inside the restored tree; absolute targets and
+  # any target containing a parent traversal are rejected.
+  if tar tvf "$archive" 2>/dev/null | awk '
+      substr($1,1,1) == "l" {
+        target=$0
+        if (sub(/^.* -> /, "", target) == 0 ||
+            target ~ /^\// || target ~ /(^|\/)\.\.($|\/)/) bad=1
+      }
+      END { exit bad ? 0 : 1 }
+    '; then
+    die "refusing to extract: archive contains an unsafe symlink"
+  fi
+
+  TMP_EXTRACT="$(mktemp -d "${SMASH_TMP}/smash.extract.XXXXXX")"
+  chmod 0700 "$TMP_EXTRACT" 2>/dev/null || die "cannot secure extraction staging dir"
+
+  # Preserve the source modes in private staging, but never trust archived
+  # ownership. Nothing in staging is reachable by other users.
+  tar xpf "$archive" -C "$TMP_EXTRACT" --no-same-owner \
+    || die "tar extraction failed"
+
+  dangerous_count=$(
+    find "$TMP_EXTRACT" -type f \( -perm +6000 -o -perm +0002 \) -print 2>/dev/null
+    find "$TMP_EXTRACT" -type d -perm +0002 ! -perm +1000 -print 2>/dev/null
+  )
+  dangerous_count=$(printf '%s\n' "$dangerous_count" | awk 'NF {n++} END {print n+0}')
+
+  # Set-ID regular files can elevate privileges. World-writable regular files
+  # and non-sticky directories can be replaced by untrusted users. Only those
+  # bits are removed; read, execute, group, sticky-dir and all other modes stay.
+  find "$TMP_EXTRACT" -type f -perm +6000 -exec chmod u-s,g-s {} \; 2>/dev/null
+  find "$TMP_EXTRACT" -type f -perm +0002 -exec chmod o-w {} \; 2>/dev/null
+  find "$TMP_EXTRACT" -type d -perm +0002 ! -perm +1000 -exec chmod o-w {} \; 2>/dev/null
+
+  # Re-archive only the private, sanitized staging tree. This preserves its
+  # modes and mtimes while --no-same-owner keeps destination ownership safe.
+  tar cpf - -C "$TMP_EXTRACT" . \
+    | tar xpf - -C "$dest" --no-same-owner \
+    || die "sanitized directory restore failed"
+
+  rm -rf "$TMP_EXTRACT"; TMP_EXTRACT=""
+  if [[ "$dangerous_count" -gt 0 ]]; then
+    warn "sanitized dangerous permission bits on $dangerous_count restored entries"
+  fi
+}
+
+# origin_line(): the provenance line, shared by BOTH manifest emitters so the
+# two can never drift apart.
+#
+# An artifact has always recorded WHAT was encoded but never WHERE IT CAME
+# FROM. For a file operand the path carries most of that, but for stdin and
+# string input it is invisible: a manifest reading `source: Selected Text.txt
+# | kind: stdin` says nothing about which app, document, or directory the
+# bytes were taken from, or how. Days later the artifact is unattributable.
+#
+# The line is emitted ALWAYS, including when nothing was supplied, so that
+# "no origin was recorded" is explicit rather than indistinguishable from
+# "the version that wrote this could not record one".
+#
+#   --origin "<text>"  caller-supplied semantic origin. Only the caller can
+#                      know it; the CLI cannot infer "Selected Text from
+#                      Safari". The UI layers (Quick Action, share extension,
+#                      menu-bar app) are expected to pass it.
+#   --origin-auto      additionally record cwd and the invoking process.
+#                      OPT-IN ONLY, deliberately: artifacts are made to be
+#                      pasted into chats, tickets, and repos, so local paths
+#                      and process names must never be embedded unless the
+#                      author explicitly asks for them.
+#
+# Values go through sn() like every other manifest value, so a hostile
+# filename or app name cannot inject control bytes into the artifact.
+origin_line() {
+  local extra="" pcmd
+  if [[ "${ORIGIN_AUTO:-0}" -eq 1 ]]; then
+    pcmd="$(ps -o comm= -p "${PPID:-0}" 2>/dev/null | sed 's|.*/||' | head -n 1)"
+    extra=" | cwd: $(sn "${PWD:-unknown}") | via: $(sn "${pcmd:-unknown}")"
+  fi
+  if [[ -n "${ORIGIN:-}" ]]; then
+    printf '# origin: %s%s\n' "$(sn "$ORIGIN")" "$extra"
+  else
+    printf '# origin: unrecorded (pass --origin "<where this came from>")%s\n' "$extra"
+  fi
 }
 
 # write_manifest <out> <src_label> <kind> <bytes> <sha256> <ext_label> <lossy>
@@ -308,6 +647,7 @@ write_manifest() {
     printf '# created: %s | host: %s\n' "$(utc_ts)" "$(sn "$(hostname 2>/dev/null || printf 'unknown')")"
     printf '# source: %s | kind: %s | bytes: %s | sha256: %s\n' \
       "$(sn "$src_label")" "$(sn "$kind")" "$(sn "$bytes")" "$(sn "$sum")"
+    origin_line
     printf '# encoding: base64( %s( source ) ) | lossy: %s\n' "$(sn "$ext")" "$lossy"
     printf '# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n'
     printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
@@ -934,6 +1274,10 @@ while [[ $# -gt 0 ]]; do
     -q|--quiet) QUIET=1; shift ;;
     --level) [[ $# -ge 2 ]] || usage; [[ "$2" =~ ^[0-9]+$ ]] || die "--level needs an integer"; LEVEL="$2"; shift 2 ;;
     --threads) [[ $# -ge 2 ]] || usage; [[ "$2" =~ ^[0-9]+$ ]] || die "--threads needs an integer"; THREADS="$2"; shift 2 ;;
+    --sink) [[ $# -ge 2 ]] || usage; SINK="$2"; shift 2 ;;
+    --sink-verify) SINK_VERIFY=1; shift ;;
+    --origin) [[ $# -ge 2 ]] || usage; ORIGIN="$2"; shift 2 ;;
+    --origin-auto) ORIGIN_AUTO=1; shift ;;
     --edit) MODE="edit"; shift ;;
     --)
       # Everything after -- is an operand, verbatim (v5.0 fix: these were
@@ -960,6 +1304,21 @@ if [[ "$AI_API_MODE" -eq 1 ]]; then
   ai_fn="ai_compress_api"
 elif [[ "$AI_MODE" -eq 1 ]]; then
   ai_fn="ai_compress"
+fi
+
+# v5.3: --sink validation — encode-only, lossless-only, path operands only.
+if [[ -n "$SINK" ]]; then
+  [[ "$ACTION" == "decode" ]] && die "--sink is encode-only"
+  [[ -n "$ai_fn" ]] && die "--sink is lossless-only (--ai cannot stream)"
+  [[ -n "$OUT_PATH" ]] && die "--sink and -o are mutually exclusive"
+  if [[ "$USE_STDIN" -eq 1 || "$MODE" == "string" || "$MODE" == "edit" ]]; then
+    die "--sink v1 takes file/dir operands only"
+  fi
+  command -v rclone >/dev/null 2>&1 || die "--sink requires rclone"
+  case "$SINK" in
+    *:*) : ;;
+    *) die "--sink needs an rclone REMOTE:PATH destination" ;;
+  esac
 fi
 
 N_OPS=${#OPERANDS[@]}
@@ -997,6 +1356,11 @@ resolve_encode_out() {
       OUTDIR="$(dirname -- "$OUT_PATH")"
       ensure_outdir "$OUTDIR" || die "cannot write to output dir: $(sn "$OUTDIR")"
     fi
+    # v5.1: an EXPLICIT -o into a web-served/live dir refuses rather than
+    # silently redirecting — the user stated intent, so make them mean it.
+    if is_unsafe_dir "$OUTDIR" && [[ "${SMASH_ALLOW_UNSAFE_OUTDIR:-0}" != "1" ]]; then
+      die "refusing -o into a web-served/live dir: $(sn "$OUTDIR") (deliberate? SMASH_ALLOW_UNSAFE_OUTDIR=1)"
+    fi
     return 0
   fi
   if [[ -n "${B64_OUTDIR:-}" ]]; then
@@ -1012,6 +1376,7 @@ resolve_encode_out() {
     ensure_outdir "$fallback" || die "cannot write to output dir"
     OUTDIR="$fallback"
   fi
+  OUTDIR="$(guard_outdir "$OUTDIR" "output")"
 }
 
 # ==========================================================================
@@ -1068,12 +1433,11 @@ encode_one() {
     die "verify failed: artifact corrupt. staged file: $TMP_FINAL"
   fi
 
-  local ts final_out final_bytes
-  ts="$(short_ts)"
+  local final_out final_bytes
   if [[ -n "$OUT_PREFIX" ]]; then
-    final_out="$(pick_outfile "$(dirname -- "$OUT_PREFIX")" "$(safe_base "$OUT_PREFIX")" "$ts" "$ext_label")"
+    final_out="$(pick_outfile "$(dirname -- "$OUT_PREFIX")" "$OUT_PREFIX")"
   else
-    final_out="$(pick_outfile "$OUTDIR" "$base" "$ts" "$ext_label")"
+    final_out="$(pick_outfile "$OUTDIR" "$base")"
   fi
 
   final_bytes=$(wc -c < "$TMP_FINAL" | tr -d ' ')
@@ -1100,13 +1464,35 @@ encode_path() {
     OUTDIR="$(dirname -- "$input")"
     ensure_outdir "$OUTDIR" || OUTDIR="${HOME:-/tmp}/smashes"
     ensure_outdir "$OUTDIR" || die "cannot write to output dir"
+    OUTDIR="$(guard_outdir "$OUTDIR" "auto-output")"
+  fi
+
+  # v5.1: reading from a web-served/live tree is fine — note it once so the
+  # operator knows the artifact will not land there.
+  local in_dir="$input"
+  [[ -d "$input" ]] || in_dir="$(dirname -- "$input")"
+  if is_unsafe_dir "$in_dir"; then
+    info 'smash: NOTE: input lives on a web-served/live tree (%s) — read-only; artifact goes to a safe dir\n' "$(sn "$input")"
+  fi
+
+  # v5.3: sink streaming — no local artifact, no temp tar; straight to remote.
+  if [[ -n "$SINK" ]]; then
+    if [[ -d "$input" ]]; then
+      encode_stream_to_sink "$input" "$input" "dir-tar" "$base"
+    elif [[ -f "$input" ]]; then
+      encode_stream_to_sink "$input" "$input" "file" "$base"
+    else
+      die "--sink operand not found: $(sn "$input")"
+    fi
+    return 0
   fi
 
   if [[ -d "$input" ]]; then
     # --- Directory: optionally AI-compress text files, then tar + encode ---
-    local dir_parent dir_base
+    local dir_parent dir_base src_mode_before src_mode_after
     dir_parent="$(dirname -- "$input")"
     dir_base="$(basename -- "$input")"
+    src_mode_before="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
     TMP_TAR="$(mktemp "${SMASH_TMP}/smash.tar.XXXXXX.tar")"
 
     if [[ -n "$ai_fn" ]]; then
@@ -1133,10 +1519,16 @@ encode_path() {
       tar cf "$TMP_TAR" -C "$dir_parent" -- "$dir_base" || die "tar failed on: $(sn "$input")"
     fi
 
+    # v5.1 source-immutability self-check: encode must never alter the source.
+    src_mode_after="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
+    if [[ "$src_mode_before" != "$src_mode_after" ]]; then
+      warn "WARNING: source dir mode changed during encode ($src_mode_before -> $src_mode_after) — THIS IS A smash BUG, report it"
+    fi
+
     local tar_bytes
     tar_bytes=$(wc -c < "$TMP_TAR" | tr -d ' ')
     info 'smash: tar: %sB\n' "$tar_bytes"
-    encode_one "$TMP_TAR" "$input" "dir-tar" "${base}.dtar"
+    encode_one "$TMP_TAR" "$input" "dir-tar" "$base"
     rm -f "$TMP_TAR"; TMP_TAR=""
   else
     encode_one "$input" "$input" "file" "$base"
@@ -1157,16 +1549,42 @@ decode_one() {
 
   [[ -r "$infile" && -f "$infile" ]] || die "not a readable file: $(sn "$infile")"
 
-  # Detect directory tar (.dtar) for auto-extraction after decode
+  # Read the self-describing manifest first. New readable artifact names no
+  # longer duplicate compression, timestamp, or directory type in the name.
+  local manifest_source manifest_kind manifest_encoding
+  manifest_source="$(sed -n 's/^# source: \(.*\) | kind: .*/\1/p' "$infile" | head -n 1)"
+  manifest_kind="$(sed -n 's/^# source: .* | kind: \([^|]*\) | bytes:.*/\1/p' "$infile" | head -n 1)"
+  manifest_encoding="$(sed -n 's/^# encoding: \(.*\) | lossy:.*/\1/p' "$infile" | head -n 1)"
+
+  # Provenance is only useful if it reaches a human on the way back out.
+  # Older artifacts have no origin line at all; absence is reported as such
+  # rather than silently, so "written before origin existed" stays legible.
+  local manifest_origin
+  manifest_origin="$(sed -n 's/^# origin: \(.*\)/\1/p' "$infile" | head -n 1)"
+  if [[ -n "$manifest_origin" ]]; then
+    info 'smash: origin: %s\n' "$(sn "$manifest_origin")"
+  else
+    info 'smash: origin: not recorded (artifact predates origin tracking)\n'
+  fi
+
+  # Detect directory tar from the manifest, retaining old .dtar compatibility.
   local is_dtar=0
-  if [[ "$name" == *".dtar."* || "$name" == *".dtar" ]]; then
+  if [[ "$manifest_kind" == "dir-tar" || "$name" == *".dtar."* || "$name" == *".dtar" ]]; then
     is_dtar=1
   fi
 
   # Auto-detect compression and AI mode from extension. Works with both the
   # v5 (.b64.<ts>.txt) and pre-v5 (.b64.<ts>) artifact names.
   local is_ai=0 decomp="xz" ext_pattern="xz"
-  if [[ "$name" == *".ai.xz.b64"* ]]; then
+  if [[ "$manifest_encoding" == *"zstd("* || "$manifest_encoding" == *"zst("* ]]; then
+    decomp="zstd"; ext_pattern="zst"
+  elif [[ "$manifest_encoding" == *"gzip("* || "$manifest_encoding" == *"gz("* ]]; then
+    decomp="gz"; ext_pattern="gz"
+  elif [[ "$manifest_encoding" == *"ai"* ]]; then
+    decomp="xz"; is_ai=1; ext_pattern="ai.xz"
+  elif [[ "$manifest_encoding" == *"xz("* ]]; then
+    decomp="xz"; ext_pattern="xz"
+  elif [[ "$name" == *".ai.xz.b64"* ]]; then
     decomp="xz"; is_ai=1; ext_pattern="ai.xz"
   elif [[ "$name" == *".xz.b64"* ]]; then
     decomp="xz"; ext_pattern="xz"
@@ -1184,10 +1602,15 @@ decode_one() {
     out_path="$DEC_OUT_FILE"
   else
     local bare="$name"
-    if [[ "$bare" == *".${ext_pattern}.b64."* ]]; then
+    if [[ -n "$manifest_source" ]]; then
+      bare="$(safe_base "$manifest_source")"
+      [[ "$is_dtar" -eq 0 ]] || bare="${bare}.dtar"
+    elif [[ "$bare" == *".${ext_pattern}.b64."* ]]; then
       bare="${bare%%.${ext_pattern}.b64.*}"
     elif [[ "$bare" == *.${ext_pattern}.b64 ]]; then
       bare="${bare%.${ext_pattern}.b64}"
+    else
+      bare="$(printf '%s' "$bare" | sed -E 's/\.smash(\.[0-9]+)?\.txt$//')"
     fi
     [[ -n "$bare" ]] || bare="restored"
 
@@ -1213,6 +1636,12 @@ decode_one() {
     warn "note: $(sn "$name") restored as an empty file (source was empty)"
   fi
 
+  # v5.1: decoding a single file INTO a web-served/live dir stays allowed
+  # (deliberate restores) but is always called out.
+  if is_unsafe_dir "$(dirname -- "$out_path")"; then
+    info 'smash: NOTE: decoding into a web-served/live dir: %s\n' "$(sn "$out_path")"
+  fi
+
   move_final "$TMP_OUT" "$out_path"
   TMP_OUT=""
 
@@ -1221,13 +1650,19 @@ decode_one() {
     local extract_dir extracted_name
     extract_dir="$(dirname -- "$out_path")"
     extracted_name="$(basename -- "$out_path" .dtar)"
+    # v5.1: mass-overwrite into a live webroot must be deliberate.
+    if is_unsafe_dir "$extract_dir" && [[ "${SMASH_ALLOW_UNSAFE_OUTDIR:-0}" != "1" ]]; then
+      die "refusing to auto-extract a directory tar into a web-served/live dir: $(sn "$extract_dir") (deliberate? SMASH_ALLOW_UNSAFE_OUTDIR=1; artifact kept: $(sn "$out_path"))"
+    fi
     info 'smash: extracting directory to: %s/%s\n' "$(sn "$extract_dir")" "$(sn "$extracted_name")"
     # Harden: payloads may be untrusted. Reject any archive member that escapes
     # the extraction dir via an absolute path or a `..` traversal component.
     if tar tf "$out_path" 2>/dev/null | grep -Eq '^/|(^|/)\.\.(/|$)'; then
       die "refusing to extract: archive contains absolute or traversal paths"
     fi
-    tar xf "$out_path" -C "$extract_dir" || die "tar extraction failed"
+    # Preserve normal source permissions. Extraction is staged privately;
+    # ownership is not restored and only dangerous permission bits are removed.
+    safe_extract_dtar "$out_path" "$extract_dir"
     rm -f -- "$out_path"
     if [[ "$is_ai" -eq 1 ]]; then
       info 'decoded+extracted (ai-compacted, lossy): %s/%s\n' "$(sn "$extract_dir")" "$(sn "$extracted_name")"
@@ -1343,7 +1778,7 @@ else
     resolve_encode_out 1 ""
     TMP_STDIN="$(mktemp "${SMASH_TMP}/smash.in.XXXXXX")"
     printf '%s' "${OPERANDS[*]}" > "$TMP_STDIN"
-    encode_one "$TMP_STDIN" "command-line arguments" "inline-args(${N_OPS})" "args"
+    encode_one "$TMP_STDIN" "command-line arguments" "inline-args(${N_OPS})" "command-line-text"
     rm -f "$TMP_STDIN"; TMP_STDIN=""
     exit 0
   fi
@@ -1355,7 +1790,7 @@ else
     string)
       TMP_STDIN="$(mktemp "${SMASH_TMP}/smash.in.XXXXXX")"
       printf '%s' "$TEXT" > "$TMP_STDIN"
-      encode_one "$TMP_STDIN" "string (-s)" "string" "string"
+      encode_one "$TMP_STDIN" "string (-s)" "string" "pasted-text"
       rm -f "$TMP_STDIN"; TMP_STDIN=""
       ;;
     edit)
@@ -1380,7 +1815,7 @@ else
       [[ ${#ed_cmd[@]} -gt 0 ]] || die "--edit needs a working \$EDITOR/\$VISUAL or one of: nano pico vi vim"
       command -v "${ed_cmd[0]}" >/dev/null 2>&1 || die "editor not found in PATH: ${ed_cmd[0]}"
       "${ed_cmd[@]}" "$TMP_TXT"
-      encode_one "$TMP_TXT" "editor session" "edit" "edit"
+      encode_one "$TMP_TXT" "editor session" "edit" "edited-text"
       rm -f "$TMP_TXT"; TMP_TXT=""
       ;;
     auto)
@@ -1397,7 +1832,9 @@ PROMPT
       TMP_STDIN="$(mktemp "${SMASH_TMP}/smash.in.XXXXXX")"
       cat > "$TMP_STDIN"
       [[ -t 0 ]] && printf '\n' 1>&2
-      encode_one "$TMP_STDIN" "stdin stream" "stdin" "stdin"
+      stream_label="stdin stream"
+      [[ -z "$OUT_PREFIX" ]] || stream_label="$(basename -- "$OUT_PREFIX")"
+      encode_one "$TMP_STDIN" "$stream_label" "stdin" "piped-text"
       rm -f "$TMP_STDIN"; TMP_STDIN=""
       ;;
     *)

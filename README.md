@@ -123,7 +123,7 @@ before the data flow:
 
 ```
 # ==== SMASH ARTIFACT v5.0 ====
-# tool: smash v5.0 (sole author: pbnkp)
+# tool: smash v5.3 (sole author: pbnkp)
 # created: 2026-07-10T12:34:56Z | host: example-host
 # source: config.json | kind: file | bytes: 48234 | sha256: 9f2a...c41d
 # encoding: base64( xz( source ) ) | lossy: no
