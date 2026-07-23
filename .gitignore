@@ -2,3 +2,7 @@ ui/macos/dist-mac/
 ui/web/dist/*.tmp
 *.bak
 .private/
+
+# built MCP binary + macOS cruft (never committed)
+mcp/smash-mcp/smash-mcp
+.DS_Store

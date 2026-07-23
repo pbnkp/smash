@@ -40,12 +40,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-const version = "1.2"
+const version = "1.3"
 const protocolVersion = "2025-06-18"
 
 // ---- limits (per-operation + transport) ----
@@ -135,16 +136,16 @@ var tools = []toolDef{
 			"mode":   obj("type", "string", "enum", []string{"native", "api"}, "description", "default native"),
 			"outdir": obj("type", "string"),
 		})},
-	{"smash_decode", "Decode smash artifacts back to original files/directories. Returns restored paths + sha256.",
+	{"smash_decode", "Decode smash artifacts back to original files/directories. Returns restored paths (sha256 for files; directories are extracted and reported by kind). Decode is NOT verification — use smash_verify to check integrity.",
 		schema(map[string]interface{}{
 			"artifacts": obj("type", "array", "items", obj("type", "string")),
 			"outdir":    obj("type", "string"),
 		}, "artifacts")},
 	{"smash_manifest", "Parse a v5 artifact's in-file manifest (source, kind, bytes, sha256, encoding, lossy). Reports base64 validity and payload size. Does not decode unless smash_verify is used.",
 		schema(map[string]interface{}{"artifact": obj("type", "string")}, "artifact")},
-	{"smash_verify", "Full integrity verification: decode the artifact to a discarded temp file and report the restored sha256. For lossless artifacts, compares restored sha256 to the manifest's source sha256 and returns match=true/false with evidence RUNTIME_VERIFIED|MISMATCH.",
+	{"smash_verify", "Full integrity verification: runs the engine's --verify, which decodes the artifact to its DECOMPRESSED payload (no extraction) and compares that sha256 to the manifest — correct for files AND directories. Returns match=true/false with evidence RUNTIME_VERIFIED | MISMATCH; a lossy (--ai) artifact reports RUNTIME_VERIFIED_LOSSY (decodes cleanly; source sha is pre-compaction, not comparable).",
 		schema(map[string]interface{}{"artifact": obj("type", "string")}, "artifact")},
-	{"smash_batch", "Run many encode/ai/decode/verify jobs in ONE call (minimizes round-trips). Each item {op, paths?/text?/artifacts?/artifact?, mode?, outdir?}. Sequential; per-item ok/error. Emits progress notifications when a progressToken is supplied.",
+	{"smash_batch", "Run many encode/ai/decode/verify jobs in ONE call (minimizes round-trips). Each item {op, paths?/text?/artifacts?/artifact?, mode?, outdir?}. Sequential; per-item ok/error.",
 		schema(map[string]interface{}{
 			"items": obj("type", "array", "items", schema(map[string]interface{}{
 				"op":        obj("type", "string", "enum", []string{"encode", "ai", "decode", "verify"}),
@@ -268,16 +269,27 @@ func fileSize(p string) int64 {
 	return -1
 }
 
+// sha256File shas a FILE via openssl reading stdin — matches the engine's own
+// sha256_file (portable across mac/FreeBSD openssl builds), avoids passing the
+// path as an argv operand (a leading-dash path could be read as a flag), and
+// drops `-r` (absent on older/FreeBSD openssl). A directory yields an error.
 func sha256File(p string) (string, error) {
-	out, err := exec.Command("openssl", "dgst", "-sha256", "-r", p).Output()
+	f, err := os.Open(p)
 	if err != nil {
 		return "", err
 	}
-	f := strings.Fields(string(out))
-	if len(f) == 0 {
+	defer f.Close()
+	cmd := exec.Command("openssl", "dgst", "-sha256")
+	cmd.Stdin = f
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
 		return "", errors.New("no digest")
 	}
-	return f[0], nil
+	return fields[len(fields)-1], nil
 }
 
 func stageText(text string) (string, error) {
@@ -437,42 +449,80 @@ func doDecode(ctx context.Context, a decodeArgs) (interface{}, error) {
 	restored := parseOutputs(stderr)
 	res := []map[string]interface{}{}
 	for _, p := range restored {
-		sum, _ := sha256File(p)
-		res = append(res, map[string]interface{}{"path": p, "bytes": fileSize(p), "sha256": sum})
+		entry := map[string]interface{}{"path": p}
+		// A dir-tar restores to a DIRECTORY: sha of a directory is meaningless
+		// (openssl errors), so report kind instead of a bogus empty sha. For a
+		// file, sha it and surface any sha failure rather than swallowing it.
+		if st, e := os.Stat(p); e == nil && st.IsDir() {
+			entry["kind"] = "directory"
+		} else {
+			entry["kind"] = "file"
+			entry["bytes"] = fileSize(p)
+			if sum, se := sha256File(p); se == nil {
+				entry["sha256"] = sum
+			} else {
+				entry["sha256"] = ""
+				entry["shaError"] = sanitizeErr(se.Error())
+			}
+		}
+		res = append(res, entry)
 	}
-	return map[string]interface{}{"ok": true, "evidence": "RUNTIME_VERIFIED", "restored": res}, nil
+	// Decode is restoration, not verification. Labeling it RUNTIME_VERIFIED
+	// would be a false evidence claim (it compares nothing to the manifest).
+	return map[string]interface{}{"ok": true, "evidence": "DECODED", "restored": res}, nil
 }
 
-// parseManifest reads only the `#` header lines of an artifact.
-func parseManifest(path string) (map[string]string, int, error) {
+// parseManifest reads the `#` header lines of an artifact and counts the
+// payload's non-whitespace bytes. The payload is a SINGLE base64 line that can
+// exceed any Scanner token cap (a >256 MiB artifact used to fail here while
+// decode still worked), so headers are read line-by-line (all short) and the
+// payload is STREAMED with a fixed buffer — bounded memory at any artifact size.
+func parseManifest(path string) (map[string]string, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer f.Close()
 	man := map[string]string{}
-	var payload int
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1024*1024), 256*1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.HasPrefix(line, "#") {
-			body := strings.TrimSpace(strings.TrimPrefix(line, "#"))
-			for _, field := range strings.Split(body, "|") {
-				kv := strings.SplitN(field, ":", 2)
-				if len(kv) == 2 {
-					k := strings.TrimSpace(kv[0])
-					v := strings.TrimSpace(kv[1])
-					if k != "" && v != "" && k != "safety" && k != "restore" {
-						man[k] = v
-					}
+	br := bufio.NewReaderSize(f, 256*1024)
+	// Header: every line starts with '#'. Peek so the huge payload line is
+	// never pulled into a buffer.
+	for {
+		b, perr := br.Peek(1)
+		if perr != nil || b[0] != '#' {
+			break
+		}
+		line, rerr := br.ReadString('\n')
+		body := strings.TrimSpace(strings.TrimPrefix(strings.TrimRight(line, "\n"), "#"))
+		for _, field := range strings.Split(body, "|") {
+			kv := strings.SplitN(field, ":", 2)
+			if len(kv) == 2 {
+				k := strings.TrimSpace(kv[0])
+				v := strings.TrimSpace(kv[1])
+				if k != "" && v != "" && k != "safety" && k != "restore" {
+					man[k] = v
 				}
 			}
-			continue
 		}
-		payload += len(strings.TrimSpace(line))
+		if rerr != nil {
+			break
+		}
 	}
-	return man, payload, sc.Err()
+	// Payload: stream the rest, counting non-whitespace bytes only.
+	var payload int64
+	buf := make([]byte, 64*1024)
+	for {
+		n, rerr := br.Read(buf)
+		for _, c := range buf[:n] {
+			if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+				payload++
+			}
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	return man, payload, nil
 }
 
 func doManifest(a oneArtifactArgs) (interface{}, error) {
@@ -485,7 +535,10 @@ func doManifest(a oneArtifactArgs) (interface{}, error) {
 		return nil, err
 	}
 	// validate base64 by streaming the non-# lines through the decoder
-	f, _ := os.Open(ap)
+	f, ferr := os.Open(ap)
+	if ferr != nil {
+		return nil, ferr
+	}
 	defer f.Close()
 	valid := true
 	dec := base64.NewDecoder(base64.StdEncoding, filteredReader(f))
@@ -503,51 +556,82 @@ func doManifest(a oneArtifactArgs) (interface{}, error) {
 	}, nil
 }
 
+// parseVerifyLine extracts the engine's `SMASH-VERIFY key=value ...` machine
+// line (printed on stdout by `smash --verify`). Values are space-free tokens.
+func parseVerifyLine(stdout string) map[string]string {
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "SMASH-VERIFY") {
+			continue
+		}
+		kv := map[string]string{}
+		for _, tok := range strings.Fields(strings.TrimPrefix(line, "SMASH-VERIFY")) {
+			if p := strings.SplitN(tok, "=", 2); len(p) == 2 {
+				kv[p[0]] = p[1]
+			}
+		}
+		return kv
+	}
+	return nil
+}
+
+func atoiSafe(s string) int64 {
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return n
+	}
+	return -1
+}
+
+// doVerify checks integrity via the engine's `smash --verify`, which decodes
+// the artifact to its DECOMPRESSED payload (the tar for a dir, the file bytes
+// for a file) with NO extraction and compares that sha256 to the manifest.
+// Correct for BOTH kinds — the old extract-then-sha path shaed a restored
+// directory (impossible) and reported every directory artifact as MISMATCH.
 func doVerify(ctx context.Context, a oneArtifactArgs) (interface{}, error) {
 	ap, err := pathAllowed(a.Artifact)
 	if err != nil {
 		return nil, err
 	}
-	man, _, err := parseManifest(ap)
-	if err != nil {
-		return nil, err
+	stdout, stderr, runErr := runSmash(ctx, encodeTimeout, "--verify", "--", ap)
+	kv := parseVerifyLine(stdout)
+	if len(kv) == 0 {
+		// No machine line: the engine errored before emitting a verdict (usage,
+		// exec, timeout). Surface it as FAILED rather than fabricating a result.
+		detail := lastLine(stderr)
+		if detail == "" && runErr != nil {
+			detail = sanitizeErr(runErr.Error())
+		}
+		return map[string]interface{}{"artifact": ap, "verified": false, "evidence": "FAILED", "error": detail}, nil
 	}
-	tmp, err := ioutil.TempDir("", "smash-mcp-verify-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tmp)
-	_, stderr, err := runSmash(ctx, encodeTimeout, "-d", "-o", tmp+string(os.PathSeparator), "--", ap)
-	if err != nil {
-		return map[string]interface{}{"artifact": ap, "verified": false, "evidence": "FAILED", "error": lastLine(stderr)}, nil
-	}
-	restored := parseOutputs(stderr)
-	if len(restored) == 0 {
-		return map[string]interface{}{"artifact": ap, "verified": false, "evidence": "FAILED", "error": "no output"}, nil
-	}
-	sum, _ := sha256File(restored[0])
-	lossy := man["lossy"] == "yes"
+	matchStr := kv["match"]
+	lossy := kv["lossy"] == "yes"
+	verified := matchStr == "true"
 	out := map[string]interface{}{
 		"artifact":       ap,
-		"verified":       true,
-		"restoredSha256": sum,
-		"restoredBytes":  fileSize(restored[0]),
+		"kind":           kv["kind"],
 		"lossy":          lossy,
+		"verified":       verified,
+		"match":          verified,
+		"restoredSha256": kv["decoded_sha256"],
+		"restoredBytes":  atoiSafe(kv["bytes"]),
 	}
-	if src, ok := man["sha256"]; ok && !lossy {
-		match := subtle.ConstantTimeCompare([]byte(src), []byte(sum)) == 1
-		out["sourceSha256"] = src
-		out["match"] = match
-		if match {
-			out["evidence"] = "RUNTIME_VERIFIED"
-		} else {
-			out["evidence"] = "MISMATCH"
-			out["verified"] = false
-		}
-	} else {
-		// lossy: byte-identity not expected; decode success is the evidence
+	if ms := kv["manifest_sha256"]; ms != "" && ms != "none" {
+		out["sourceSha256"] = ms
+	}
+	switch {
+	case matchStr == "true" && lossy:
 		out["evidence"] = "RUNTIME_VERIFIED_LOSSY"
-		out["note"] = "lossy artifact: restored bytes intentionally differ from source"
+		out["note"] = "lossy artifact: decodes cleanly; source sha is pre-compaction and not comparable"
+	case matchStr == "true":
+		out["evidence"] = "RUNTIME_VERIFIED"
+	case matchStr == "unknown":
+		out["evidence"] = "INDETERMINATE"
+		out["note"] = "artifact carries no manifest sha256 (pre-v5); it decodes cleanly but integrity is not comparable"
+	default:
+		out["evidence"] = "MISMATCH"
+		if r := kv["reason"]; r != "" {
+			out["error"] = r
+		}
 	}
 	return out, nil
 }
@@ -655,10 +739,14 @@ func callTool(ctx context.Context, name string, argsRaw json.RawMessage) (interf
 		}
 		mode := a.Mode
 		a.Mode = ""
-		if mode == "api" {
+		switch mode {
+		case "", "native":
+			return doEncode(ctx, a, "native")
+		case "api":
 			return doEncode(ctx, a, "api")
+		default:
+			return nil, fmt.Errorf("unknown ai mode: %s (use 'native' or 'api')", sanitizeErr(mode))
 		}
-		return doEncode(ctx, a, "native")
 	case "smash_decode":
 		var a decodeArgs
 		if err := json.Unmarshal(orEmpty(argsRaw), &a); err != nil {
@@ -697,11 +785,14 @@ func callTool(ctx context.Context, name string, argsRaw json.RawMessage) (interf
 			case "encode":
 				r, err = doEncode(ctx, encodeArgs{Paths: it.Paths, Text: it.Text, Mode: it.Mode, Outdir: it.Outdir}, "")
 			case "ai":
-				m := "native"
-				if it.Mode == "api" {
-					m = "api"
+				switch it.Mode {
+				case "", "native":
+					r, err = doEncode(ctx, encodeArgs{Paths: it.Paths, Text: it.Text, Outdir: it.Outdir}, "native")
+				case "api":
+					r, err = doEncode(ctx, encodeArgs{Paths: it.Paths, Text: it.Text, Outdir: it.Outdir}, "api")
+				default:
+					err = fmt.Errorf("unknown ai mode: %s (use 'native' or 'api')", sanitizeErr(it.Mode))
 				}
-				r, err = doEncode(ctx, encodeArgs{Paths: it.Paths, Text: it.Text, Outdir: it.Outdir}, m)
 			case "decode":
 				r, err = doDecode(ctx, decodeArgs{Artifacts: it.Artifacts, Outdir: it.Outdir})
 			case "verify":
@@ -1030,8 +1121,11 @@ func main() {
 				}
 			}
 		}
-	} else if *httpAddr != "" {
-		// HTTP mode gets containment by default: home + tempdir.
+	} else {
+		// Default containment for BOTH stdio and HTTP: home + tempdir. The AI
+		// model chooses the paths it passes, so confine reads/writes to the
+		// user's own trees — an unconfined stdio server could be steered into
+		// e.g. ~/.ssh. Override with -roots / SMASH_MCP_ROOTS.
 		if home, err := os.UserHomeDir(); err == nil {
 			allowedRoots = append(allowedRoots, filepath.Clean(home))
 		}

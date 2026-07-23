@@ -4,6 +4,66 @@ All notable changes to smash are documented here.
 
 ---
 
+## v5.4 — 2026-07-22
+
+The verification & hardening release. Adds a real `smash --verify`, fixes a
+family of edge-case data-integrity and robustness bugs surfaced by a full
+three-front audit (engine · Go MCP · adversarial round-trip), and hardens the
+MCP server. Artifact format is unchanged — every prior v5.x artifact still
+decodes.
+
+### Added
+- `smash --verify <artifact>` (alias `--check`): decodes an artifact to its
+  DECOMPRESSED payload (no extraction) and compares its sha256 to the manifest —
+  correct for files AND directories. Exit 1 on mismatch. Prints a machine-
+  readable `SMASH-VERIFY …` line the MCP consumes; lossy artifacts are reported,
+  not failed.
+
+### Fixed (engine)
+- **mktemp fixed-name temp files** (`smash.stage.*.b64`, `smash.tar.*.tar`): the
+  trailing suffix defeated BSD `mktemp` randomization, causing parallel-encode
+  collisions and stale-file poisoning that broke every subsequent encode.
+- **`--ai` on binary via stdin / `-s` / inline args** skipped the lossless
+  fallback and could write a silently-truncated lossy artifact; the text check
+  now runs for every input kind.
+- A regular file named `*.dtar` was force-extracted as a tar on decode (the
+  filename heuristic overrode the manifest); the manifest is now authoritative.
+- A symlink-to-directory operand archived the link, not its contents (silent
+  data loss); it now resolves to the real directory, loudly.
+- `safe_base` let a newline in a source filename survive into the artifact name.
+- The web-served/live output guard now also covers a bare `www` directory.
+- Encode warns when a directory holds a symlink its own decoder will refuse.
+- `--sink` rcat failure no longer leaves a truncated remote object (the cleanup
+  handler was dead code under `set -e`).
+
+### Fixed (MCP server)
+- **`smash_verify` reported every directory artifact as MISMATCH** — it shaed the
+  restored directory (impossible). It now calls `smash --verify`.
+- `sha256File` errors were swallowed (`sum, _ :=`), masking failures; now
+  surfaced. `smash_decode` no longer stamps `RUNTIME_VERIFIED` (it verifies
+  nothing) — it reports `DECODED`, with directory results by kind.
+- **stdio transport now applies path containment** (home + tempdir by default;
+  override with `-roots` / `SMASH_MCP_ROOTS`) — an unconfined server could be
+  steered to read arbitrary files.
+- Dropped the false "emits progress notifications" claim from `smash_batch`.
+- `sha256File` reads via stdin (portable openssl, no `-r`, no leading-dash
+  operand). Unknown `ai` modes are rejected. Manifest parsing streams the
+  payload so a >256 MiB artifact no longer overflows the scanner buffer.
+
+---
+
+## v5.3 — 2026-07-18
+
+The "stream, don't stage" release.
+
+### Added
+- `--sink REMOTE:PATH`: stream each artifact straight to an rclone remote with
+  no local artifact and bounded memory (source bytes+sha256 ride in a trailing
+  manifest). `--sink-verify` re-downloads and compares. Lossless only.
+- `--origin` / `--origin-auto`: record where a payload came from in the manifest.
+
+---
+
 ## v5.2 — 2026-07-15
 
 The readable-artifact and clipboard-drop release.

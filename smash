@@ -65,7 +65,7 @@ export PATH
 # straight to an rclone remote with no local artifact and bounded memory;
 # source bytes+sha256 ride in a trailing manifest (decoders are position-
 # agnostic). Lossless only. Transfer retry/parts/rate delegated to rclone.
-VERSION="5.3"
+VERSION="5.4"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -164,12 +164,16 @@ usage:
                                   extracts dirs, strips v5 manifest,
                                   reads pre-v5 headerless artifacts)
   smash -d -                      decode an artifact piped/pasted on stdin
+  smash --verify <artifact> ...   verify artifacts decode + sha256 matches
+                                  the manifest (no output; exit 1 on mismatch)
   smash -s "text"                 encode string
   smash --edit                    open editor, encode on save
   smash                           interactive paste mode (Ctrl+D ends)
 
 options:
   -d, --decode    Decode mode (reverses base64 + compression)
+      --verify    Verify artifacts decode + sha256 matches the manifest (files
+                  AND dirs; no extraction); exit 1 on mismatch. Alias: --check
   -g, --gz        Use gzip (or pigz if installed) instead of xz
   -z, --zstd      Use zstd instead of xz (needs zstd to encode/decode)
   -x, --xz        Use xz (default, explicit), multithreaded via -T0
@@ -231,7 +235,10 @@ safe_base() {
   s="${s##*/}"
   # Keep words readable instead of deleting spaces, avoid hidden/repeated-dot
   # outputs, and remove an old/new Smash suffix when re-smashing an artifact.
-  s="$(printf '%s' "$s" | LC_ALL=C sed -E \
+  # v5.4: strip control bytes (incl. the record-separator newline the
+  # line-oriented sed below cannot see) BEFORE the readable-name pass, so a
+  # filename with an embedded newline/tab can't survive into the artifact name.
+  s="$(printf '%s' "$s" | LC_ALL=C tr '\000-\037\177' '-' | LC_ALL=C sed -E \
     -e 's/[^A-Za-z0-9._-]+/-/g' \
     -e 's/[._-]{2,}/-/g' \
     -e 's/^[._-]+//' \
@@ -288,7 +295,7 @@ ensure_outdir() {
 # must never mutate its input. Guards fire on encode output, -o, and .dtar
 # auto-extraction. Deliberate override: SMASH_ALLOW_UNSAFE_OUTDIR=1.
 # ---------------------------------------------------------------------------
-SMASH_UNSAFE_RE='public_html|/Library/CloudStorage/ShellFish/|htdocs|wwwroot|/usr/local/www/|/var/www/'
+SMASH_UNSAFE_RE='public_html|/Library/CloudStorage/ShellFish/|htdocs|wwwroot|/usr/local/www/|/var/www/|(^|/)www(/|$)'
 SMASH_SAFE_FALLBACK="${HOME:-/tmp}/smashes"
 
 # real_dir: physical path of a dir (best effort; no readlink -f dependency).
@@ -1262,6 +1269,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage ;;
     -V|--version) printf 'smash v%s\n' "$VERSION"; exit 0 ;;
     -d|--decode) ACTION="decode"; shift ;;
+    --verify|--check) ACTION="verify"; shift ;;
     -x|--xz) COMPRESS_MODE="xz"; shift ;;
     -g|--gz) COMPRESS_MODE="gz"; shift ;;
     -z|--zstd|--zst)
@@ -1308,7 +1316,7 @@ fi
 
 # v5.3: --sink validation — encode-only, lossless-only, path operands only.
 if [[ -n "$SINK" ]]; then
-  [[ "$ACTION" == "decode" ]] && die "--sink is encode-only"
+  [[ "$ACTION" != "encode" ]] && die "--sink is encode-only"
   [[ -n "$ai_fn" ]] && die "--sink is lossless-only (--ai cannot stream)"
   [[ -n "$OUT_PATH" ]] && die "--sink and -o are mutually exclusive"
   if [[ "$USE_STDIN" -eq 1 || "$MODE" == "string" || "$MODE" == "edit" ]]; then
@@ -1391,8 +1399,11 @@ encode_one() {
   local ext_label lossy="no" use_ai="$ai_fn"
 
   # --ai on non-text content would mangle bytes through the awk compactor;
-  # fall back to lossless for that input (loud, once per input).
-  if [[ -n "$use_ai" && "$kind" == "file" ]] && ! is_text_file "$src"; then
+  # fall back to lossless for that input (loud, once per input). $src is always
+  # a staged regular file here (file / dir-tar / stdin / string / inline-args),
+  # so the text check must run for EVERY kind — the old "kind == file" gate let
+  # binary via stdin/-s/args reach the compactor and silently truncate (v5.4).
+  if [[ -n "$use_ai" ]] && ! is_text_file "$src"; then
     warn "note: $(sn "$label") is not text — using lossless xz (no --ai) for it"
     use_ai=""
   fi
@@ -1410,7 +1421,7 @@ encode_one() {
   src_bytes=$(wc -c < "$src" | tr -d ' ')
   src_sum="$(sha256_file "$src")"
 
-  TMP_B64="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX.b64")"
+  TMP_B64="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX")"
 
   if [[ -n "$use_ai" ]]; then
     TMP_AI="$(mktemp "${SMASH_TMP}/smash.ai.XXXXXX")"
@@ -1455,6 +1466,15 @@ encode_one() {
 encode_path() {
   local input="$1"
   input="${input%/}"
+  # v5.4: a symlink to a directory follows [[ -d ]] but `tar` would archive the
+  # LINK, not its contents — silent data loss (and an absolute target then makes
+  # the artifact unrestorable via the decode-side guard). Resolve to the real
+  # directory and archive that, loudly, so the contents are actually captured.
+  if [[ -L "$input" && -d "$input" ]]; then
+    local _real_input; _real_input="$(real_dir "$input")"
+    warn "note: $(sn "$input") is a symlink to a directory — archiving the target's contents ($(sn "$_real_input")), not the link"
+    input="$_real_input"
+  fi
   local base
   base="$(safe_base "$input")"
 
@@ -1493,7 +1513,7 @@ encode_path() {
     dir_parent="$(dirname -- "$input")"
     dir_base="$(basename -- "$input")"
     src_mode_before="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
-    TMP_TAR="$(mktemp "${SMASH_TMP}/smash.tar.XXXXXX.tar")"
+    TMP_TAR="$(mktemp "${SMASH_TMP}/smash.tar.XXXXXX")"
 
     if [[ -n "$ai_fn" ]]; then
       TMP_AIDIR="$(mktemp -d "${SMASH_TMP}/smash.aidir.XXXXXX")"
@@ -1523,6 +1543,20 @@ encode_path() {
     src_mode_after="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
     if [[ "$src_mode_before" != "$src_mode_after" ]]; then
       warn "WARNING: source dir mode changed during encode ($src_mode_before -> $src_mode_after) — THIS IS A smash BUG, report it"
+    fi
+
+    # v5.4: warn now if the tree carries a symlink whose target is absolute or
+    # uses `..`. The bytes ARE archived, but smash's own extraction guard will
+    # (correctly) refuse them on decode — without this note the encode looks
+    # clean yet the artifact can never be restored via `smash -d`.
+    if tar tvf "$TMP_TAR" 2>/dev/null | awk '
+        substr($1,1,1) == "l" {
+          t = $0; sub(/^.* -> /, "", t)
+          if (t ~ /^\// || t ~ /(^|\/)\.\.($|\/)/) bad = 1
+        }
+        END { exit bad ? 0 : 1 }
+      '; then
+      warn "note: this directory contains a symlink with an absolute or '..' target — the bytes are archived, but 'smash -d' will REFUSE to extract it (safety guard). Restore those paths another way."
     fi
 
     local tar_bytes
@@ -1568,8 +1602,11 @@ decode_one() {
   fi
 
   # Detect directory tar from the manifest, retaining old .dtar compatibility.
+  # v5.4: the manifest is authoritative. The .dtar filename heuristic is only a
+  # fallback for pre-v5 artifacts that carry NO kind — otherwise a regular file
+  # merely named "*.dtar" was force-extracted as a tar and died undecodable.
   local is_dtar=0
-  if [[ "$manifest_kind" == "dir-tar" || "$name" == *".dtar."* || "$name" == *".dtar" ]]; then
+  if [[ "$manifest_kind" == "dir-tar" || ( -z "$manifest_kind" && ( "$name" == *".dtar."* || "$name" == *".dtar" ) ) ]]; then
     is_dtar=1
   fi
 
@@ -1675,6 +1712,89 @@ decode_one() {
     info 'decoded: %s\n' "$(sn "$out_path")"
   fi
 }
+
+# ==========================================================================
+# verify_one: v5.4 integrity check. Decode the artifact to its DECOMPRESSED
+# payload (the tar for a dir, the file bytes for a file) WITHOUT extracting,
+# and compare its sha256 to the manifest. Correct for BOTH kinds because the
+# manifest sha256 is the sha of exactly those decompressed bytes. Prints a
+# stable machine-readable `SMASH-VERIFY ...` line on stdout (the MCP parses it)
+# plus a human line on stderr. A lossy (--ai) artifact carries the
+# pre-compaction source sha that decode cannot reproduce, so the compare is
+# skipped and reported as such rather than failed.
+# ==========================================================================
+verify_one() {
+  local infile="$1"
+  [[ -r "$infile" && -f "$infile" ]] || die "not a readable file: $(sn "$infile")"
+
+  local m_kind m_sha m_enc m_lossy
+  m_kind="$(sed -n 's/^# source: .* | kind: \([^|]*\) | bytes:.*/\1/p' "$infile" | head -n 1)"
+  m_kind="$(printf '%s' "$m_kind" | tr -d ' ')"
+  m_sha="$(sed -n 's/^# source: .* | sha256: \([0-9a-fA-F]\{64\}\).*$/\1/p' "$infile" | head -n 1)"
+  m_enc="$(sed -n 's/^# encoding: \(.*\) | lossy:.*/\1/p' "$infile" | head -n 1)"
+  m_lossy="$(sed -n 's/^# encoding: .* | lossy: \([A-Za-z]*\).*$/\1/p' "$infile" | head -n 1)"
+
+  local decomp="xz"
+  if [[ "$m_enc" == *"zstd("* || "$m_enc" == *"zst("* ]]; then decomp="zstd"
+  elif [[ "$m_enc" == *"gzip("* || "$m_enc" == *"gz("* ]]; then decomp="gz"
+  fi
+  [[ "$decomp" != "zstd" ]] || command -v zstd >/dev/null 2>&1 || die "verifying .zst payloads requires zstd"
+
+  local got_sha got_bytes
+  TMP_OUT="$(mktemp "${SMASH_TMP}/smash.vrfy.XXXXXX")"
+  if ! decode_to_tmp "$TMP_OUT" "$decomp" < "$infile" 2>/dev/null; then
+    rm -f "$TMP_OUT"; TMP_OUT=""
+    printf 'SMASH-VERIFY match=false kind=%s decoded_sha256= manifest_sha256=%s bytes=0 lossy=%s reason=decode-failed\n' \
+      "${m_kind:-unknown}" "${m_sha:-none}" "${m_lossy:-no}"
+    warn "verify: $(sn "$infile") — FAILED (artifact does not decode)"
+    return 1
+  fi
+  got_bytes=$(wc -c < "$TMP_OUT" | tr -d ' ')
+  got_sha="$(sha256_file "$TMP_OUT")"
+  rm -f "$TMP_OUT"; TMP_OUT=""
+
+  if [[ "$m_lossy" == "yes" ]]; then
+    printf 'SMASH-VERIFY match=true kind=%s decoded_sha256=%s manifest_sha256=%s bytes=%s lossy=yes reason=lossy-no-source-compare\n' \
+      "${m_kind:-unknown}" "$got_sha" "${m_sha:-none}" "$got_bytes"
+    info 'smash: verify: %s — LOSSY artifact; decodes OK (%sB). Source sha is pre-compaction, not comparable.\n' "$(sn "$infile")" "$got_bytes"
+    return 0
+  fi
+  if [[ -z "$m_sha" ]]; then
+    printf 'SMASH-VERIFY match=unknown kind=%s decoded_sha256=%s manifest_sha256=none bytes=%s lossy=no reason=no-manifest-sha\n' \
+      "${m_kind:-unknown}" "$got_sha" "$got_bytes"
+    info 'smash: verify: %s — decodes OK (%sB) but the artifact carries no manifest sha256 (pre-v5); integrity uncheckable.\n' "$(sn "$infile")" "$got_bytes"
+    return 0
+  fi
+  if [[ "$got_sha" == "$m_sha" ]]; then
+    printf 'SMASH-VERIFY match=true kind=%s decoded_sha256=%s manifest_sha256=%s bytes=%s lossy=no\n' \
+      "${m_kind:-unknown}" "$got_sha" "$m_sha" "$got_bytes"
+    info 'smash: verify: %s — OK (sha256 matches manifest, %sB)\n' "$(sn "$infile")" "$got_bytes"
+    return 0
+  fi
+  printf 'SMASH-VERIFY match=false kind=%s decoded_sha256=%s manifest_sha256=%s bytes=%s lossy=no\n' \
+    "${m_kind:-unknown}" "$got_sha" "$m_sha" "$got_bytes"
+  warn "verify: $(sn "$infile") — MISMATCH (decoded sha256 != manifest sha256)"
+  return 1
+}
+
+if [[ "$ACTION" == "verify" ]]; then
+  # ==========================================
+  # VERIFY (v5.4)  — integrity check, no output files, no extraction
+  # ==========================================
+  if [[ "$USE_STDIN" -eq 1 ]]; then
+    TMP_STDIN="$(mktemp "${SMASH_TMP}/smash.in.XXXXXX")"
+    cat > "$TMP_STDIN"
+    OPERANDS+=("$TMP_STDIN")
+    N_OPS=${#OPERANDS[@]}
+  fi
+  [[ "$N_OPS" -gt 0 ]] || usage
+  vrc=0
+  for op in "${OPERANDS[@]}"; do
+    verify_one "$op" || vrc=1
+  done
+  [[ -z "${TMP_STDIN:-}" ]] || { rm -f "$TMP_STDIN"; TMP_STDIN=""; }
+  exit "$vrc"
+fi
 
 if [[ "$ACTION" == "decode" ]]; then
   # ==========================================
