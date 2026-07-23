@@ -1122,26 +1122,37 @@ ai_compress_api() {
   local is_anthropic=0
   local is_local=0
 
-  # --- Auto-detect provider from env vars ---
+  # --- Provider selection (v5.4: LOCAL-FIRST) ---
+  # Precedence: explicit B64_AI_URL  >  B64_AI_LOCAL=1 (force local)  >  a cloud
+  # key (opt-in)  >  local Ollama default. With nothing configured, `smash
+  # --ai-api` runs a LOCAL model — no key, no token cost, no provider rate limit
+  # or forced delay, and nothing leaves the machine.
   if [[ -z "$api_url" ]]; then
-    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    if [[ "${B64_AI_LOCAL:-0}" == "1" ]]; then
+      api_url="http://localhost:11434/v1/chat/completions"
+      is_local=1
+      model="${model:-llama3}"
+    elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
       api_url="https://api.anthropic.com/v1/messages"
       api_key="${api_key:-$ANTHROPIC_API_KEY}"
-      model="${model:-claude-sonnet-4-6}"
+      model="${model:-claude-haiku-4-5-20251001}"
       is_anthropic=1
     elif [[ -n "${OPENAI_API_KEY:-}" ]]; then
       api_url="https://api.openai.com/v1/chat/completions"
       api_key="${api_key:-$OPENAI_API_KEY}"
       model="${model:-gpt-4o-mini}"
     else
-      die "--ai-api needs: B64_AI_URL, or ANTHROPIC_API_KEY, or OPENAI_API_KEY"
+      api_url="http://localhost:11434/v1/chat/completions"
+      is_local=1
+      model="${model:-llama3}"
+      info 'smash: ai-api: no cloud provider set — using local Ollama (%s); set B64_AI_URL or a cloud key to change\n' "$api_url"
     fi
   else
     # URL provided — detect format
     if [[ "$api_url" == *"anthropic.com"* ]]; then
       is_anthropic=1
       api_key="${api_key:-${ANTHROPIC_API_KEY:-}}"
-      model="${model:-claude-sonnet-4-6}"
+      model="${model:-claude-haiku-4-5-20251001}"
     else
       api_key="${api_key:-${OPENAI_API_KEY:-}}"
       model="${model:-gpt-4o-mini}"

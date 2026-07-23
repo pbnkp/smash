@@ -69,10 +69,24 @@ final class Engine {
         p.standardOutput = so; p.standardError = se
         if input != nil { p.standardInput = si }
         do { try p.run() } catch { return (127, "", "cannot launch smash: \(error.localizedDescription)") }
+
+        // Drain stdout+stderr CONCURRENTLY so a full pipe buffer can never
+        // deadlock the child; collect the bytes with a group.
+        var outData = Data(), errData = Data()
+        let group = DispatchGroup()
+        group.enter(); DispatchQueue.global().async { outData = so.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+        group.enter(); DispatchQueue.global().async { errData = se.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+
         if let input = input {
             DispatchQueue.global().async {
-                si.fileHandleForWriting.write(input)
-                try? si.fileHandleForWriting.close()
+                let fh = si.fileHandleForWriting
+                // smash may close stdin early (it errored, or a small input was
+                // consumed fast). The THROWING write returns EPIPE instead of
+                // raising, and SIGPIPE is ignored app-wide (see main) so the
+                // signal can't terminate us. This broken-pipe write was the
+                // instant drag-crash (no crash report = SIGPIPE termination).
+                do { try fh.write(contentsOf: input) } catch { /* broken pipe: not fatal */ }
+                try? fh.close()
             }
         }
         let deadline = Date().addingTimeInterval(timeout)
@@ -81,8 +95,9 @@ final class Engine {
             if p.isRunning { p.terminate() }
         }
         p.waitUntilExit()
-        let o = String(data: so.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let e = String(data: se.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        group.wait()
+        let o = String(data: outData, encoding: .utf8) ?? ""
+        let e = String(data: errData, encoding: .utf8) ?? ""
         return (p.terminationStatus, o, e)
     }
 
@@ -187,6 +202,7 @@ final class DropView: NSView {
     var onDrop: (([String]) -> Void)?
     var onTextDrop: ((String) -> Void)?
     var onClick: (() -> Void)?
+    var onRightClick: (() -> Void)?
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL, .string])
@@ -216,6 +232,7 @@ final class DropView: NSView {
         return false
     }
     override func mouseDown(with event: NSEvent) { onClick?() }
+    override func rightMouseDown(with event: NSEvent) { onRightClick?() }
 }
 
 // Large, discoverable drop target inside the menu popover. It shares the same
@@ -313,6 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             dv.onDrop = { [weak self] paths in self?.handle(paths: paths) }
             dv.onTextDrop = { [weak self] text in self?.handle(text: text) }
             dv.onClick = { [weak self] in self?.togglePopover() }
+            dv.onRightClick = { [weak self] in self?.showContextMenu() }
             b.addSubview(dv)
         }
         popover.behavior = .transient
@@ -355,6 +373,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let b = status.button else { return }
         popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+    }
+
+    // Right-click on the menu-bar icon → a real context menu (left-click still
+    // toggles the popover; we do NOT set status.menu, which would hijack both).
+    func showContextMenu() {
+        guard let b = status.button else { return }
+        let menu = NSMenu()
+        func add(_ title: String, _ sel: Selector, _ target: AnyObject, _ key: String = "") {
+            let it = NSMenuItem(title: title, action: sel, keyEquivalent: key)
+            it.target = target
+            menu.addItem(it)
+        }
+        add("Settings / Recent…", #selector(togglePopover), self)
+        add("Smash Clipboard Text", #selector(smashClipboard), self)
+        add("Choose Files or Folders…", #selector(chooseInputs), self)
+        add("Open Output Folder", #selector(openOutput), self)
+        menu.addItem(.separator())
+        add("Quit smash", #selector(NSApplication.terminate(_:)), NSApp, "q")
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: b.bounds.height + 4), in: b)
+    }
+    @objc func chooseInputs() { pickInputs() }
+    @objc func openOutput() {
+        let d = ud.string(forKey: "outdir") ?? home("smashes")
+        try? FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(URL(fileURLWithPath: d))
     }
 
     func handle(paths: [String]) {
@@ -629,6 +672,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 }
+
+// Ignore SIGPIPE process-wide: writing to a child (smash) that closed its stdin
+// early must return EPIPE to the writer, not terminate the whole app. Without
+// this, dragging text/content onto the menu bar could crash instantly with no
+// crash report — the default SIGPIPE action is silent process termination.
+signal(SIGPIPE, SIG_IGN)
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
