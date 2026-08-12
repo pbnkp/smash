@@ -20,8 +20,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Smash</string>
   <key>CFBundleExecutable</key><string>smash-menubar</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>5.0</string>
-  <key>CFBundleVersion</key><string>5.0</string>
+  <key>CFBundleShortVersionString</key><string>5.3</string>
+  <key>CFBundleVersion</key><string>5.3</string>
   <key>LSUIElement</key><true/>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHumanReadableCopyright</key><string>Copyright (c) 2026 pbnkp.</string>
