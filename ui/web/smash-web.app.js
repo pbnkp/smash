@@ -4,7 +4,7 @@
    byte-compatible with the smash CLI (.gz.b64.<ts>.txt, v5 manifest). */
 (function(){
 "use strict";
-var V="5.0", $=function(s,r){return (r||document).querySelector(s)}, CE=function(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e};
+var V="5.3", $=function(s,r){return (r||document).querySelector(s)}, CE=function(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e};
 
 /* ---- tokens + styles (dark home / light twin, viewer toggle wins) ---- */
 var css=""
