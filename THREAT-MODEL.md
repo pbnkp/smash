@@ -13,6 +13,12 @@ the AI provider you configure, and the transport network beyond loopback.
   modes).
 - **The web app's code integrity** (a served bundle must not be silently
   altered).
+- **History metadata** (filenames, sizes, sha256s, timestamps kept in
+  IndexedDB) — not secret, but not meant to leak cross-origin or persist
+  beyond the user's intent either.
+- **Persisted file-access capability** (`FileSystemFileHandle`s stored for
+  relink on Chromium) — must require a live permission check on every use,
+  never silent re-access.
 
 ## Actors / entry points
 1. A **hostile artifact or file** handed to `smash -d` / dropped in the web app.
@@ -23,6 +29,9 @@ the AI provider you configure, and the transport network beyond loopback.
 5. A **network attacker** against the optional HTTP transport.
 6. A **CDN/host compromise** altering served web assets.
 7. A **local attacker** reading temp files or process args for secrets.
+8. A **script on the same web origin** (XSS elsewhere, a malicious browser
+   extension with storage access) reading IndexedDB history or attempting to
+   invoke a persisted `FileSystemFileHandle`.
 
 ## Threats & mitigations
 
@@ -42,6 +51,9 @@ the AI provider you configure, and the transport network beyond loopback.
 | T12 | XSS via hostile filename/content in the web UI | untrusted values via `textContent`; `innerHTML` only static/numeric; strict CSP, no inline/eval | code audit; CSP |
 | T13 | Cache poisoning of the PWA | SW verifies SHA-256 at install, fails closed; never caches unverified bytes | logic static-verified; hashes runtime-correct |
 | T14 | Downgrade/format confusion (v5 vs pre-v5) | manifest is `#`-prefixed and stripped on decode; pre-v5 still decodes; lossy flagged | decode-compat tests |
+| T15 | XSS/malicious extension reads history metadata (filenames, sha256s, timestamps) from IndexedDB | reference-metadata-only — never source or artifact bytes; same-origin-sandboxed by the browser; user-clearable | code audit; not a secret store by design |
+| T16 | Persisted `FileSystemFileHandle` used to silently re-read a file after the tab closes | handle only exists from an explicit user gesture; `queryPermission`/`requestPermission` re-checked on every relink, not cached as "always allow"; sha256 re-verified and mismatches surfaced, never hidden | code audit; caniuse-verified Safari/Firefox have no such API at all |
+| T17 | Single-file build's hash-sourced CSP silently diverges from what the browser actually executes, breaking the page (or worse, permitting more than intended) | hashes computed from the byte sequence the browser actually evaluates (UTF-8 re-encoding of the reconstructed string), not the source file on disk | real headless-Chrome CSP-violation test caught an actual divergence pre-fix; zero violations post-fix |
 
 ## Residual risk / accepted
 - **SW runtime activation** is not runtime-proven in the headless build
@@ -52,6 +64,11 @@ the AI provider you configure, and the transport network beyond loopback.
   account is not treated as one. Local-endpoint proof (mock + Ollama) stands
   in. (T7)
 - **Notarization** of the macOS app is not performed in this environment.
+- **Actual mobile browsers on physical hardware** are not exercised — the
+  streaming-pipeline memory-safety claim (T-none-numbered, see CHANGELOG web
+  v5.4) rests on a headless-Chrome-desktop synthetic test plus the
+  architectural fix itself, not a real iOS/Android device. Verify before
+  relying on it for genuinely large mobile uploads.
 - **TLS termination** for the off-loopback HTTP transport is delegated to the
   operator's certs; smash refuses off-loopback without them but does not manage
   rotation.

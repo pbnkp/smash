@@ -40,6 +40,36 @@ gained capabilities the CLI doesn't have.
   so it gets a guided "tap Share → Add to Home Screen" hint instead, shown
   once and never once `display-mode: standalone` / `navigator.standalone`
   indicates it's already installed.
+- **`ui/web/index.html` is now the production-complete single-file build**,
+  not just a `file://` fallback: inline favicon, meta description, and an
+  inlined `data:` URI PWA manifest (verified installable — `beforeinstallprompt`
+  fired correctly in a real headless-Chrome run against it, not assumed to
+  work). Its CSP moved to hash-sourced `script-src` (`sha256-…` on the loader
+  and payload scripts) instead of `'unsafe-inline'`, matching `dist/`'s
+  security posture despite having no external script to apply SRI to.
+  Documented trade-off in INSTALL.md: this variant has no service worker (no
+  second file to register one against), so it always runs online — use
+  `dist/` if offline support matters more than file count.
+
+### Fixed (build process)
+- **The CSP hash-source computation had two real bugs, both caught by testing
+  against a real browser, not by review.** (1) The loader script's hash was
+  computed via an `awk` line-reconstruction that introduced a whitespace/
+  newline mismatch — Chrome's own CSP-violation message showed the correct
+  hash, which matched neither of the two hashes in the policy. This would
+  have completely broken the page (CSP blocks the loader itself → blank
+  screen) had it shipped untested. (2) The payload script's hash was computed
+  as a plain file hash, but the loader reconstructs the payload via
+  `atob()` → JS string (Latin-1: one char per original byte) → assigned to
+  `textContent`, and CSP hashes the UTF-8 re-encoding of that string — for a
+  file containing non-ASCII bytes (this one has em-dashes, arrows, middle
+  dots in its UI copy), that diverges from a plain file hash. Verified
+  empirically that the two hash values differ for this file, not assumed.
+  Fixed by extracting the loader's exact bytes by offset (Python, not `awk`
+  reconstruction) and computing the payload hash via the same Latin-1-decode-
+  then-UTF-8-re-encode transform the browser actually performs. Re-verified
+  in headless Chrome post-fix: zero CSP violations, full functional test
+  passes (`ok:true`).
 
 ### Fixed
 - Web artifact naming now matches the CLI's (`<name>.smash.txt`) instead of

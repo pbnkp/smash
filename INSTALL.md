@@ -62,10 +62,32 @@ right-click → Open (Gatekeeper). Install Finder actions with
 `ui/macos/install-quickactions.sh`.
 
 ## Web / PWA
-Static hosting — copy `ui/web/dist/` to any static host (or open
-`ui/web/index.html` directly via `file://` for the self-contained variant).
-Apply the headers in `dist/deploy-csp.conf`. On iPhone/iPad: open the hosted
-URL in Safari → Share → **Add to Home Screen** to install the PWA.
+
+Two deployable variants — pick based on whether you want offline support or
+zero-file-count simplicity. Both are production-complete, not demos.
+
+**`ui/web/index.html` — single file, production-complete.**
+Copy this one file anywhere: any static host, `file://` locally, a
+`data:`/blob URL, an internal wiki attachment. Self-contained (zero external
+requests — the app code, favicon, and PWA manifest are all inlined), with a
+hash-sourced Content-Security-Policy (`script-src` allows only the exact
+known-good script bytes by SHA-256 — no `'unsafe-inline'`). Installable as a
+real app on Chromium/Android (`beforeinstallprompt` — verified this fires
+correctly against the inlined `data:` URI manifest); on iPhone/iPad, Safari
+→ Share → **Add to Home Screen**. **Trade-off:** no offline support — there's
+no separate file a service worker can be registered against, so this variant
+always runs online. If offline matters more than file count, use `dist/`
+below instead.
+
+**`ui/web/dist/` — multi-file, offline-capable.**
+Copy the whole directory to any static host. Apply the headers in
+`dist/deploy-csp.conf` (a plain file host without header support still gets
+the CSP via `dist/index.html`'s `<meta>` tag, minus `frame-ancestors`, which
+browsers only honor via a real header — see `deploy-csp.conf`'s own comment).
+Loads `app.min.js` via Subresource Integrity instead of inlining it, and
+registers a service worker that hash-verifies every cached asset at install
+and fails closed on mismatch — this is the variant that works offline after
+first load. On iPhone/iPad: Safari → Share → **Add to Home Screen**.
 
 ## Requirements summary
 | Component | Needs |

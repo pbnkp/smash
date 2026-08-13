@@ -82,6 +82,55 @@ the terminal.**
 - **Minification is not a security boundary.** `app.min.js` is compacted for
   size; the integrity boundary is SRI + the SW hash check, not obscurity. The
   readable source (`smash-web.app.js`) is kept out of `dist/`.
+- **Single-file build: hash-sourced CSP, no `'unsafe-inline'`.** `ui/web/index.html`
+  (the production-complete single page) can't use SRI on an external script —
+  there is no external script, everything is inline by design. Instead its CSP
+  allows script execution only via exact `sha256-…` hash sources for the
+  loader's own inline script and the dynamically-injected payload script; no
+  `'unsafe-inline'`, no `'unsafe-eval'`. *Verified: a real headless-Chrome run
+  against a build with an incorrectly-computed hash showed the browser's own
+  CSP-violation console message and refused to execute — caught and fixed
+  before shipping. The hash computation matches the browser's actual runtime
+  behavior (UTF-8 re-encoding of the `atob()`-reconstructed string, not a
+  plain file hash — the file's own em-dashes/arrows made this a real, not
+  theoretical, divergence).*
+- **History (IndexedDB) is metadata-only, but it is client-side storage, not a
+  secret store.** Encode/decode history keeps name, size, sha256, mode, and
+  timestamp — never source or artifact bytes. That metadata sits unencrypted
+  in the browser's IndexedDB for the page's origin, readable by any script
+  that runs on that origin (e.g. an XSS elsewhere on the same origin, or a
+  malicious browser extension with storage access) — filenames and content
+  hashes are not secrets by smash's own model, but a user should not assume
+  history is private in the same way "nothing is uploaded" implies. History
+  is user-clearable from the UI and is never transmitted anywhere by smash
+  itself.
+- **Relink (File System Access) persists a capability, not a secret, and it is
+  re-checked, not silent.** On Chromium, picking/dropping a file captures a
+  `FileSystemFileHandle` and stores it in the same IndexedDB history record.
+  That handle is a live capability to re-read that specific file later — it
+  outlives the tab. Two things bound it: (1) the handle only exists because
+  the user made an explicit, real file-picker/drop gesture in the first
+  place — smash cannot mint one itself; (2) every use calls
+  `queryPermission`/`requestPermission` before reading, so a stale or
+  revoked-by-the-OS handle is caught, not silently honored, and the relinked
+  file's sha256 is re-verified and any mismatch is surfaced in the UI, never
+  hidden. Safari/Firefox have no such API at all (verified against current
+  browser support data, not assumed) — relink there is a manual re-pick with
+  the same sha256 check, so the capability-persistence risk doesn't exist on
+  those browsers by construction.
+- **The streaming pipeline's one full-buffer read is a deliberate, disclosed
+  trade-off, not an oversight.** `crypto.subtle.digest` has no incremental/
+  streaming form, so computing a real sha256 requires one full read of the
+  input. A hand-rolled streaming hash was considered and rejected: a wrong
+  hash in an integrity tool is a worse failure than a slower one. Everything
+  downstream of that one read — compression, base64 encoding, output — is
+  genuinely streamed (chunk-by-chunk, never fully materialized), which is
+  what changed from the pre-streaming implementation. *Verified against a
+  real 600MB synthetic file in headless Chrome: encode succeeded, correct
+  sha256, no crash — with the caveat that this test methodology is
+  conservative/pessimistic relative to a real disk-sourced file (see
+  CHANGELOG.md's web v5.4 entry for the exact reasoning). Not verified: an
+  actual mobile browser on physical hardware.*
 
 ## macOS app
 
