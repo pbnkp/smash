@@ -5,8 +5,8 @@
    worker never activates and a poisoned/altered asset is never cached or
    served. Offline use cannot be silently tampered. */
 "use strict";
-var CACHE = "smash-v5.3-29253d65";
-var INTEGRITY = {"index.html": "641b9139facd6b3da642ed600e4f85a089c498c3f22283971d5729ca685e0086", "app.min.js": "29253d65cd0817d49bb0965d29f05883d98912f0eeb1d275f0972c13e9877947", "manifest.webmanifest": "8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4", "icon.svg": "e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39"};
+var CACHE = "smash-v5.4-e4a74d05";
+var INTEGRITY = {"index.html": "f475d4cd28ab0283aa424dd47bd7b7472ff7775c826d8e2d8670f2ceef4082a3", "app.min.js": "e4a74d05df7e4b7ac4a7da854d488dca064a508d3d33bcc8191c61f0378c3190", "manifest.webmanifest": "8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4", "icon.svg": "e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39"};
 
 function hex(buf) {
   var v = new Uint8Array(buf), s = "", i;

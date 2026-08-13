@@ -4,6 +4,51 @@ All notable changes to smash are documented here.
 
 ---
 
+## web v5.4 — 2026-08-13
+
+Streaming rewrite of the web app (`ui/web/`). The CLI itself is unchanged
+(still v5.3) — this is a web-only version bump; the two now share the same
+artifact format (`<name>.smash.txt`) but track separately since the web app
+gained capabilities the CLI doesn't have.
+
+### Added
+- **Streaming encode/decode.** The old pipeline read the whole file via
+  `arrayBuffer()`, materialized the whole compressed output, then built one
+  giant base64 string — roughly 4-5x the file size in peak JS heap, easily
+  enough to crash mobile Safari on a large video. The rewrite streams
+  compression and base64 output chunk-by-chunk (3-byte-aligned encode,
+  4-char-aligned decode, both carry a small cross-chunk buffer) straight into
+  either a `showSaveFilePicker()` writable stream (Chromium: never touches
+  JS heap as one blob) or a `Blob` built from an array of small parts
+  (Safari/Firefox: the browser assembles it, not one JS string). One full
+  buffer read remains, deliberately: computing a real sha256 needs the whole
+  input, and `crypto.subtle.digest` has no incremental form — a hand-rolled
+  streaming hash was ruled out as the wrong place to introduce a bug in an
+  integrity tool. Verified via headless Chrome against a real 600MB
+  synthetic file (encode succeeded, correct sha256, no crash) and a real
+  encode→decode round trip with byte-exact content match.
+- **History (IndexedDB, no login).** Reference metadata only — name, size,
+  sha256, mode, timestamp — never the source bytes or the artifact bytes.
+  Clearable from the UI.
+- **Relink.** On Chromium, picking or dropping a file via the File System
+  Access API captures a `FileSystemFileHandle`, stored alongside its history
+  entry for silent re-access later (permission re-request, sha256
+  re-verify). Safari/Firefox lack that API entirely — relink there falls
+  back to a manual re-pick with the same sha256 verification.
+- **PWA install UX.** Captures `beforeinstallprompt` on Chromium/Android for
+  a real install button; iOS Safari has no programmatic install API at all,
+  so it gets a guided "tap Share → Add to Home Screen" hint instead, shown
+  once and never once `display-mode: standalone` / `navigator.standalone`
+  indicates it's already installed.
+
+### Fixed
+- Web artifact naming now matches the CLI's (`<name>.smash.txt`) instead of
+  the web app's own older `<name>.gz.b64.<timestamp>.txt` scheme —
+  cross-tool interop verified with the real installed CLI decoding a
+  web-produced artifact.
+
+---
+
 ## v5.0 — 2026-07-10
 
 The "many things in, one safe text file out" release.
