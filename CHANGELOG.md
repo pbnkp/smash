@@ -57,6 +57,20 @@ pretending otherwise.
 - **MCP `parseOutputs` matched decode lines by exact prefix** and missed any
   parenthesized variant with variable content (bit first on media-fit's
   `decoded (media-fit jpeg q=NN — ...)`); now matches the line shape.
+- **Sealed single-file pages regenerated** (`ui/web/index.html` +
+  `artifact.html`). They embed the whole payload behind a pinned SHA-256, so
+  editing `smash-web.app.js` alone does NOT update them — `ui/web/build.sh`
+  must run after any payload change or the app keeps executing the old
+  embedded version. v5.5 media-fit verified in the real sealed UI via
+  scripted drop events over CDP (encode card 68% + media-fit chip; restored
+  card matches fit-sha256).
+- **Sealed-mode mojibake fixed.** The loader assigned the raw `atob()`
+  Latin-1 string as script text, so every non-ASCII glyph in the UI copy
+  rendered garbled (`â€`/`â†'` for em-dashes/arrows, `â` for ✓) — latent
+  since the sealed loader existed; dist mode was unaffected. The loader now
+  decodes the already-verified bytes with `TextDecoder("utf-8")`, which also
+  simplifies the CSP script hash to the plain payload file hash (same bytes
+  the PIN covers).
 
 ---
 

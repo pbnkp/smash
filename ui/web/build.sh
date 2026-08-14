@@ -20,19 +20,13 @@ cd "$(dirname "$0")"
 PIN=$(openssl dgst -sha256 < smash-web.app.js | awk '{print $NF}')
 PAYLOAD=$(openssl enc -base64 -A < smash-web.app.js)
 # CSP script-src hashes must match what the browser actually computes at
-# runtime, not the source file on disk. The loader reconstructs the payload
-# via atob() -> JS string (Latin-1: one char per original byte) -> assigned
-# to a <script>'s textContent. CSP then hashes the UTF-8 re-encoding of that
-# string. Since the file contains non-ASCII bytes (em-dashes, arrows, etc.
-# in the UI copy), a straight file hash silently diverges from what CSP
-# computes — a Latin-1-decode-then-UTF-8-re-encode is required to match.
-# Verified empirically, not assumed: the two hashes differ for this file.
-PAYLOAD_HASH_B64=$(python3 -c "
-import sys, base64, hashlib
-raw = open('smash-web.app.js','rb').read()
-reencoded = raw.decode('latin-1').encode('utf-8')
-print(base64.b64encode(hashlib.sha256(reencoded).digest()).decode())
-")
+# runtime. Since v5.5 the loader decodes the verified bytes with
+# TextDecoder("utf-8") before assigning textContent (the old Latin-1 raw
+# string rendered every non-ASCII glyph in the UI as mojibake — â€/â†'
+# instead of em-dashes/arrows). textContent is now the true source text, so
+# CSP's hash of its UTF-8 encoding equals the plain file hash — same bytes
+# the PIN covers.
+PAYLOAD_HASH_B64=$(openssl dgst -sha256 -binary smash-web.app.js | openssl base64 -A)
 ICON_B64=$(openssl enc -base64 -A < icon.svg)
 
 loader_js() {
@@ -57,7 +51,7 @@ try{
   const v=new Uint8Array(h);let s="",j;for(j=0;j<v.length;j++)s+=(v[j]<16?"0":"")+v[j].toString(16);
   if(s!==PIN){fail("payload bytes do not match the pinned SHA-256. refusing to run.",s);return}
   window.__SMASH_PIN__=PIN;
-  const sc=document.createElement("script");sc.textContent=raw;document.body.appendChild(sc);
+  const sc=document.createElement("script");sc.textContent=new TextDecoder().decode(a);document.body.appendChild(sc);
  },function(){fail("hash computation failed; refusing to run.")});
 }catch(e){fail("loader error; refusing to run.")}
 })();

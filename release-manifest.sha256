@@ -1,5 +1,5 @@
 8db1fdbeff2cdea2151cb2939ee7149eabeca33a975c9b13d6bea1d6133bba04  ./BUILD.md
-ad7b435b19d55132ec37a59d25d2cb89ea8f39654468560f6abfceca09217f3a  ./CHANGELOG.md
+64bb1a9cec1b028661e0bd4406ce80bd924c492ee5c84dbe045892ecb8d96041  ./CHANGELOG.md
 40da33918e3bf0bbc2a0214d3d138844e4ef91646ead409a2eda0cb792079c0b  ./INSTALL.md
 7ccd57d788e06514233390e8fd37439d367677b04d3e3f5c49bd758eca604ef9  ./install.sh
 4abd581aa07748ff3f1f7e5f095732410891a6fca7fce7d1e997d4ed3f674090  ./LICENSE
@@ -17,9 +17,9 @@ a5b984983c19c309738ea40a3bdf05b5f0effb526db972deadba5581e5132a31  ./THREAT-MODEL
 ff98dbf60bc389fac8c1ef78b126a0f19ab9e5ca9c3e28ba170f2f8ada361139  ./ui/macos/package.sh
 b1e0a3065fc2fe313fc6a20e304aa488576a091e1b68d931fa7c2615259db86f  ./ui/macos/sign-and-manifest.sh
 54d05228627a9d9c4b507c8ec06b0edf44f313326906d0d1c757d78dc7571603  ./ui/macos/smash-menubar.swift
-119f02d6162339f5a96d9773e7cd9f4aa0015b1516b46cbed009565efacdb352  ./ui/web/artifact.html
+bfde82c451394a173d16f8b3cb8facac83ca443d8516cb446d7d4cdfec07e366  ./ui/web/artifact.html
 80b97e3053af5002d6677aecc0d9c38c4f0e8573c5a3303aecbe2b612615e8d2  ./ui/web/build-dist.sh
-2fc75ad676e76edb1a488d146676a386e09e94b7bf1e84f522b6cf73e34f093a  ./ui/web/build.sh
+ea2484980f73381ee4053de47e2f2e2f5f052dd35b12941dda29802c990dbd83  ./ui/web/build.sh
 72fd7958b5180eb08503ff0502cfcfab17e26c02754c7447aefd2f8c11fe10df  ./ui/web/dist/app.min.js
 ccc3a34008a2dd741f68612c48f1ecf6c91b86ae3c2df7704e82eefdffb2e557  ./ui/web/dist/deploy-csp.conf
 e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39  ./ui/web/dist/icon.svg
@@ -28,7 +28,7 @@ a95273e9a662446fc4aae88a4ce82feb84aa6e0166d47215b8f548c892540455  ./ui/web/dist/
 8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4  ./ui/web/dist/manifest.webmanifest
 8676d44eda74bcfdc737d7619de6aaed519cef8bfdfa10e8b04151e0fe236e20  ./ui/web/dist/sw.js
 e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39  ./ui/web/icon.svg
-9644e856f238f1300e45a7800b5d8472bbf7a68a71bd65531997aaa9444a4ded  ./ui/web/index.html
+a6317a49df35791b0b69ff193a88b1d90a3059370893fad1e9c4e6616ffeb7de  ./ui/web/index.html
 8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4  ./ui/web/manifest.webmanifest
 4507688f18e3d8c5588d3de116d1069c13d150481d9ae5e21af3a000306fb234  ./ui/web/minify.py
 086a0c6d85d6f17cf7d6fd724d8af6d13fbbd11e880f511f19df0cde7b87ae48  ./ui/web/smash-web.app.js
