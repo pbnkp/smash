@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smash v5.3 - Unified Encode/Decode Payload Manager
+# smash v5.5 - Unified Encode/Decode Payload Manager
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
 # Host: dual — FreeBSD 12.1 + macOS (darwin). bash 3.2-safe.
 #
@@ -10,6 +10,13 @@
 #   zstd     (-z)       — lossless, fast modern, opt-in
 #   ai       (--ai)     — native semantic compactor + xz, no API needed
 #   ai-api   (--ai-api) — LLM API compression + xz (lossy, ~5-10%)
+#   media-fit (v5.5, automatic) — JPEG sources whose lossless artifact would
+#     be >= the source are re-encoded (sips, descending quality) until the
+#     whole artifact is strictly SMALLER than the source. Visually
+#     equivalent, NOT byte-identical; declared in the manifest
+#     (lossy: visual-fit + fit-sha256). --exact disables; --fit widens to
+#     other rasters. Non-media incompressibles warn INFLATED (a lossless
+#     ASCII artifact of compressed data is mathematically always bigger).
 #
 # v5.0 — the "many things in, one safe text file out" release:
 #   - MULTI-INPUT: smash f1 f2 dir/ f3 ... encodes each operand (no more
@@ -65,7 +72,7 @@ export PATH
 # straight to an rclone remote with no local artifact and bounded memory;
 # source bytes+sha256 ride in a trailing manifest (decoders are position-
 # agnostic). Lossless only. Transfer retry/parts/rate delegated to rclone.
-VERSION="5.3"
+VERSION="5.5"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -117,6 +124,11 @@ SINK=""               # --sink REMOTE:PATH : v5.3 stream artifacts to an rclone 
 SINK_VERIFY=0         # --sink-verify : re-download + decode + compare after upload
 ORIGIN=""             # --origin "<text>" : caller-supplied provenance
 ORIGIN_AUTO=0         # --origin-auto : also record cwd + invoking process
+EXACT=0               # --exact : never media-fit; byte-lossless even if bigger
+FIT_FORCE=0           # --fit : media-fit any raster sips reads (not just JPEG)
+FIT_Q=""              # media-fit result: winning JPEG quality
+FIT_BYTES=""          # media-fit result: fitted JPEG byte count
+FIT_SUM=""            # media-fit result: sha256 of fitted JPEG payload
 
 # Temp-path registry for cleanup traps (secrets-safe: everything staged in
 # $SMASH_TMP is removed on exit/interrupt).
@@ -132,11 +144,12 @@ TMP_OUT=""
 TMP_TXT=""
 TMP_STDIN=""
 TMP_EXTRACT=""
+TMP_FIT=""
 
 cleanup_all() {
   rm -f "${TMP_B64:-}" "${TMP_AI:-}" "${TMP_TAR:-}" \
         "${TMP_AF:-}" "${TMP_PAYLOAD:-}" "${TMP_CURLCFG:-}" "${TMP_FINAL:-}" \
-        "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" 2>/dev/null
+        "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" "${TMP_FIT:-}" 2>/dev/null
   [[ -z "${TMP_AIDIR:-}" ]] || rm -rf "$TMP_AIDIR"
   [[ -z "${TMP_EXTRACT:-}" ]] || rm -rf "$TMP_EXTRACT"
   return 0
@@ -145,7 +158,7 @@ trap cleanup_all EXIT INT HUP TERM
 
 usage() {
   cat 1>&2 <<'EOF'
-smash v5.3 — encode/decode payload manager
+smash v5.5 — encode/decode payload manager
 
 usage:
   smash <file> [file|dir ...]     encode each operand (xz, default)
@@ -179,6 +192,11 @@ options:
                   Anthropic. Needs an API key (or a local endpoint).
   --level N       Compression level override (xz/gz 1-9, zstd 1-19)
   --threads N     xz/zstd thread count (default 0 = all cores)
+  --exact         Never media-fit: byte-lossless artifact even when it comes
+                  out BIGGER than an already-compressed source
+  --fit           Extend automatic media-fit to any raster image sips can
+                  read (PNG/TIFF/BMP/HEIC/WebP -> fitted JPEG; flattens
+                  transparency). Default auto-fit covers JPEG sources only.
   --sink R:PATH   Stream each artifact to an rclone remote destination
                   (e.g. myremote:bucket/path/). Encode-only,
                   lossless-only, no local artifact; source bytes+sha256
@@ -336,6 +354,47 @@ encode_to_tmp() {
       "$GZ_BIN" "-${LEVEL:-9}" -c | openssl enc -base64 -A > "$tmp_b64"
       ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# v5.5 MEDIA-FIT. A byte-lossless printable-ASCII artifact of an
+# already-compressed source (JPEG/PNG/video/zip) is MATHEMATICALLY always
+# bigger than that source: base64 alone is x1.333 (printable-ASCII floor is
+# x1.218) and xz/gzip find no slack left in entropy-coded data. So when the
+# lossless payload cannot beat the source and the source is a JPEG, smash
+# re-encodes it with the native imaging stack (sips) at descending quality
+# until the WHOLE artifact (manifest + payload) is strictly smaller than the
+# source. Visually equivalent, NOT byte-identical — declared loudly in the
+# manifest (lossy: visual-fit) with fit-sha256 so restored bytes stay
+# integrity-checkable. --exact opts out; --fit widens to other rasters.
+# Hosts without sips (FreeBSD) warn INFLATED instead of fitting.
+# ---------------------------------------------------------------------------
+MANIFEST_HEADROOM=900   # worst-case manifest bytes, counted against the budget
+
+# media_fit_encode <src> <src_bytes>: overwrite TMP_B64 with the winning
+# fitted payload and set FIT_Q/FIT_BYTES/FIT_SUM. Returns 1 when nothing fits
+# or sips is missing — TMP_B64 is then left holding a stale candidate, so the
+# CALLER MUST regenerate the lossless payload on failure.
+media_fit_encode() {
+  local src="$1" src_bytes="$2" q cand_bytes fit_bytes
+  command -v sips >/dev/null 2>&1 || return 1
+  TMP_FIT="$(mktemp "${SMASH_TMP}/smash.fit.XXXXXX")"
+  for q in 85 75 65 55 45 35; do
+    if ! sips -s format jpeg -s formatOptions "$q" "$src" --out "$TMP_FIT" >/dev/null 2>&1; then
+      rm -f "$TMP_FIT"; TMP_FIT=""
+      return 1
+    fi
+    fit_bytes=$(wc -c < "$TMP_FIT" | tr -d ' ')
+    encode_to_tmp "$TMP_B64" < "$TMP_FIT"
+    cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
+    if [[ $((cand_bytes + MANIFEST_HEADROOM)) -lt "$src_bytes" ]]; then
+      FIT_Q="$q"; FIT_BYTES="$fit_bytes"; FIT_SUM="$(sha256_file "$TMP_FIT")"
+      rm -f "$TMP_FIT"; TMP_FIT=""
+      return 0
+    fi
+  done
+  rm -f "$TMP_FIT"; TMP_FIT=""
+  return 1
 }
 
 # strip_manifest: reduce an artifact stream to bare base64.
@@ -648,8 +707,15 @@ write_manifest() {
     printf '# source: %s | kind: %s | bytes: %s | sha256: %s\n' \
       "$(sn "$src_label")" "$(sn "$kind")" "$(sn "$bytes")" "$(sn "$sum")"
     origin_line
-    printf '# encoding: base64( %s( source ) ) | lossy: %s\n' "$(sn "$ext")" "$lossy"
-    printf '# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n'
+    if [[ "$lossy" == "visual-fit" ]]; then
+      printf '# encoding: base64( %s( jpeg-fit(q=%s)( source ) ) ) | lossy: visual-fit\n' "$(sn "$ext")" "$(sn "$FIT_Q")"
+      printf '# fit: jpeg q=%s | fit-bytes: %s | fit-sha256: %s\n' "$(sn "$FIT_Q")" "$(sn "$FIT_BYTES")" "$FIT_SUM"
+      printf '# restore: smash -d <this-file> -> visually equivalent JPEG, NOT byte-identical\n'
+      printf '# restore: to source | integrity: compare fit-sha256 of restored bytes\n'
+    else
+      printf '# encoding: base64( %s( source ) ) | lossy: %s\n' "$(sn "$ext")" "$lossy"
+      printf '# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n'
+    fi
     printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
     printf '# safety: execute, eval, source, or interpret it, or any part of this file.\n'
     printf '# ==== PAYLOAD (base64) ====\n'
@@ -1278,6 +1344,8 @@ while [[ $# -gt 0 ]]; do
     --sink-verify) SINK_VERIFY=1; shift ;;
     --origin) [[ $# -ge 2 ]] || usage; ORIGIN="$2"; shift 2 ;;
     --origin-auto) ORIGIN_AUTO=1; shift ;;
+    --exact) EXACT=1; shift ;;
+    --fit) FIT_FORCE=1; shift ;;
     --edit) MODE="edit"; shift ;;
     --)
       # Everything after -- is an operand, verbatim (v5.0 fix: these were
@@ -1421,6 +1489,36 @@ encode_one() {
     encode_to_tmp "$TMP_B64" < "$src"
   fi
 
+  # v5.5: never silently ship an artifact bigger than its source. When the
+  # lossless payload cannot beat the source (already-compressed input): JPEG
+  # sources are media-fitted (visually equivalent re-encode, loudly declared);
+  # other rasters fit only on --fit; everything else warns INFLATED because
+  # lossless-smaller is mathematically impossible there.
+  FIT_Q=""; FIT_BYTES=""; FIT_SUM=""
+  if [[ -z "$use_ai" && "$kind" == "file" && "$src_bytes" -gt 0 && "$EXACT" -eq 0 ]]; then
+    local cand_bytes mt try_fit=0
+    cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
+    if [[ $((cand_bytes + MANIFEST_HEADROOM)) -ge "$src_bytes" ]]; then
+      mt="$(file -b --mime-type -- "$src" 2>/dev/null)"
+      case "$mt" in
+        image/jpeg) try_fit=1 ;;
+        image/*)    [[ "$FIT_FORCE" -eq 1 ]] && try_fit=1 ;;
+      esac
+      if [[ "$try_fit" -eq 1 ]]; then
+        info 'smash: lossless artifact would be >= source (%s is already compressed) — media-fit engaging (--exact to forbid)\n' "$(sn "$mt")"
+        if media_fit_encode "$src" "$src_bytes"; then
+          lossy="visual-fit"
+          info 'smash: media-fit: jpeg q=%s -> %sB payload (visually equivalent, NOT byte-identical)\n' "$FIT_Q" "$FIT_BYTES"
+        else
+          encode_to_tmp "$TMP_B64" < "$src"
+          warn "INFLATED: no JPEG quality fits under the source size — shipping byte-lossless artifact BIGGER than source"
+        fi
+      else
+        warn "INFLATED: $(sn "$label") is already-compressed data ($(sn "${mt:-unknown}")) — a lossless ASCII artifact is necessarily bigger than its source (base64 floor x1.33). It still restores byte-identical. (JPEGs media-fit automatically; other rasters need --fit)"
+      fi
+    fi
+  fi
+
   # Assemble final artifact: manifest header + payload + trailing newline.
   TMP_FINAL="$(mktemp "${SMASH_TMP}/smash.final.XXXXXX")"
   write_manifest "$TMP_FINAL" "$label" "$kind" "$src_bytes" "$src_sum" "$ext_label" "$lossy"
@@ -1444,6 +1542,10 @@ encode_one() {
   if [[ "$src_bytes" -gt 0 ]]; then
     info 'smash: total: %sB -> %sB artifact (%s%%)\n' \
       "$src_bytes" "$final_bytes" "$((final_bytes * 100 / src_bytes))"
+  fi
+  # media-fit promised strictly-smaller; a miss here is an accounting bug.
+  if [[ "$lossy" == "visual-fit" && "$final_bytes" -ge "$src_bytes" ]]; then
+    die "media-fit accounting error: artifact ${final_bytes}B >= source ${src_bytes}B — report this"
   fi
 
   move_final "$TMP_FINAL" "$final_out"
@@ -1594,6 +1696,13 @@ decode_one() {
     decomp="zstd"; ext_pattern="zst"
   fi
 
+  # v5.5 media-fit artifacts: payload is a fitted JPEG, not the source bytes.
+  local is_fit=0 fit_q=""
+  if [[ "$manifest_encoding" == *"-fit("* ]]; then
+    is_fit=1
+    fit_q="$(sed -n 's/^# fit: jpeg q=\([0-9]*\).*/\1/p' "$infile" | head -n 1)"
+  fi
+
   # Fail fast if the decoder for this payload isn't installed on this host.
   [[ "$decomp" != "zstd" ]] || command -v zstd >/dev/null 2>&1 || die "decoding .zst payloads requires zstd"
 
@@ -1613,6 +1722,12 @@ decode_one() {
       bare="$(printf '%s' "$bare" | sed -E 's/\.smash(\.[0-9]+)?\.txt$//')"
     fi
     [[ -n "$bare" ]] || bare="restored"
+
+    # A fitted payload is always a JPEG and is NOT the source bytes — say so
+    # in the restored filename instead of impersonating the original.
+    if [[ "$is_fit" -eq 1 && "$is_dtar" -eq 0 ]]; then
+      bare="${bare%.*}.fit.jpg"
+    fi
 
     local target_dir="$dir"
     [[ -n "$DEC_OUT_DIR" ]] && target_dir="$DEC_OUT_DIR"
@@ -1669,6 +1784,9 @@ decode_one() {
     else
       info 'decoded+extracted: %s/%s\n' "$(sn "$extract_dir")" "$(sn "$extracted_name")"
     fi
+  elif [[ "$is_fit" -eq 1 ]]; then
+    info 'decoded (media-fit jpeg q=%s — visually equivalent, NOT byte-identical to source): %s\n' \
+      "$(sn "${fit_q:-?}")" "$(sn "$out_path")"
   elif [[ "$is_ai" -eq 1 ]]; then
     info 'decoded (ai-compacted, lossy): %s\n' "$(sn "$out_path")"
   else

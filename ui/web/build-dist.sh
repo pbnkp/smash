@@ -45,12 +45,12 @@ IDX_SHA=$(sha256hex "$DIST/index.html")
 APP_SHA=$(sha256hex "$DIST/app.min.js")
 MAN_SHA=$(sha256hex "$DIST/manifest.webmanifest")
 ICO_SHA=$(sha256hex "$DIST/icon.svg")
-CACHE_TAG="smash-v5.4-${APP_SHA:0:8}"
+CACHE_TAG="smash-v5.5-${APP_SHA:0:8}"
 
 python3 - "$IDX_SHA" "$APP_SHA" "$MAN_SHA" "$ICO_SHA" > "$DIST/integrity.json" <<'PY'
 import json,sys
 idx,app,man,ico=sys.argv[1:5]
-print(json.dumps({"version":"5.4","assets":{
+print(json.dumps({"version":"5.5","assets":{
  "index.html":idx,"app.min.js":app,"manifest.webmanifest":man,"icon.svg":ico}},indent=2))
 PY
 

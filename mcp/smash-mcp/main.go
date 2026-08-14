@@ -8,11 +8,12 @@
 // artifact paths + metadata, never raw content.
 //
 // Transports:
-//   stdio (default)            — newline-delimited JSON-RPC 2.0 (MCP stdio)
-//   -http 127.0.0.1:PORT       — loopback JSON-RPC over HTTP POST /mcp.
-//                                Requires a bearer token (constant-time
-//                                compare). Non-loopback bind is refused
-//                                unless -allow-remote AND TLS are supplied.
+//
+//	stdio (default)            — newline-delimited JSON-RPC 2.0 (MCP stdio)
+//	-http 127.0.0.1:PORT       — loopback JSON-RPC over HTTP POST /mcp.
+//	                             Requires a bearer token (constant-time
+//	                             compare). Non-loopback bind is refused
+//	                             unless -allow-remote AND TLS are supplied.
 //
 // Go 1.13-compatible: uses io/ioutil, no generics, no post-1.13 stdlib APIs.
 // Target parity with bernie's Go 1.13.7.
@@ -43,19 +44,19 @@ import (
 	"time"
 )
 
-const version = "1.1"
+const version = "1.2"
 const protocolVersion = "2025-06-18"
 
 // ---- limits (per-operation + transport) ----
 const (
-	maxHTTPBody      = 64 << 20  // 64 MiB request cap
-	maxConcurrent    = 8         // in-flight tool calls
-	rateWindow       = 10 * time.Second
-	rateMax          = 120       // requests per window (HTTP)
-	encodeTimeout    = 120 * time.Second
-	aiAPITimeout     = 300 * time.Second
-	maxBatchItems    = 256
-	maxInlineText    = 8 << 20 // 8 MiB inline text via temp file
+	maxHTTPBody   = 64 << 20 // 64 MiB request cap
+	maxConcurrent = 8        // in-flight tool calls
+	rateWindow    = 10 * time.Second
+	rateMax       = 120 // requests per window (HTTP)
+	encodeTimeout = 120 * time.Second
+	aiAPITimeout  = 300 * time.Second
+	maxBatchItems = 256
+	maxInlineText = 8 << 20 // 8 MiB inline text via temp file
 )
 
 var (
@@ -118,12 +119,13 @@ func schema(props map[string]interface{}, required ...string) map[string]interfa
 var tools = []toolDef{
 	{"smash_capabilities", "List smash version, engine binary, compression modes, artifact format, transports, and per-operation limits.", schema(map[string]interface{}{})},
 	{"smash_health", "Liveness/readiness: confirm the smash engine binary is present and executes. Returns ok|degraded|down with detail.", schema(map[string]interface{}{})},
-	{"smash_encode", "Losslessly compress+encode files/directories (or inline text) into smash artifacts (<name>.smash.txt: ASCII manifest + base64 payload). Returns artifact paths, sizes, sha256 of source; never raw content.",
+	{"smash_encode", "Compress+encode files/directories (or inline text) into smash artifacts (<name>.smash.txt: ASCII manifest + base64 payload). Lossless by default; v5.5: a JPEG whose lossless artifact would exceed the source is auto media-fitted (visually equivalent re-encode, manifest-declared lossy: visual-fit + fit-sha256) so the artifact is always SMALLER than the source — pass exact:true to force byte-lossless even if bigger. Other already-compressed inputs warn INFLATED. Returns artifact paths, sizes, sha256 of source; never raw content.",
 		schema(map[string]interface{}{
 			"paths":  obj("type", "array", "items", obj("type", "string"), "description", "files or directories to encode"),
 			"text":   obj("type", "string", "description", "inline text to encode instead of paths"),
 			"mode":   obj("type", "string", "enum", []string{"xz", "gz", "zstd"}, "description", "lossless mode (default xz)"),
 			"outdir": obj("type", "string", "description", "output dir (must be inside an approved root)"),
+			"exact":  obj("type", "boolean", "description", "true = never media-fit; byte-lossless artifact even when bigger than an already-compressed source"),
 		})},
 	{"smash_ai_compress", "LOSSY semantic compression of text (mode 'native' = offline dictionary, ~25-40%; mode 'api' = LLM via smash's provider env). Returns artifact paths + sizes.",
 		schema(map[string]interface{}{
@@ -139,7 +141,7 @@ var tools = []toolDef{
 		}, "artifacts")},
 	{"smash_manifest", "Parse a v5 artifact's in-file manifest (source, kind, bytes, sha256, encoding, lossy). Reports base64 validity and payload size. Does not decode unless smash_verify is used.",
 		schema(map[string]interface{}{"artifact": obj("type", "string")}, "artifact")},
-	{"smash_verify", "Full integrity verification: decode the artifact to a discarded temp file and report the restored sha256. For lossless artifacts, compares restored sha256 to the manifest's source sha256 and returns match=true/false with evidence RUNTIME_VERIFIED|MISMATCH.",
+	{"smash_verify", "Full integrity verification: decode the artifact to a discarded temp file and report the restored sha256. Lossless artifacts: restored sha256 vs manifest source sha256 -> RUNTIME_VERIFIED|MISMATCH. Media-fit artifacts (lossy: visual-fit): restored sha256 vs manifest fit-sha256 -> RUNTIME_VERIFIED_FIT|MISMATCH.",
 		schema(map[string]interface{}{"artifact": obj("type", "string")}, "artifact")},
 	{"smash_batch", "Run many encode/ai/decode/verify jobs in ONE call (minimizes round-trips). Each item {op, paths?/text?/artifacts?/artifact?, mode?, outdir?}. Sequential; per-item ok/error. Emits progress notifications when a progressToken is supplied.",
 		schema(map[string]interface{}{
@@ -221,13 +223,27 @@ func runSmash(ctx context.Context, timeout time.Duration, args ...string) (strin
 
 func parseOutputs(stderr string) []string {
 	var out []string
-	prefixes := []string{"encoded: ", "decoded: ", "decoded+extracted: ",
-		"decoded (ai-compacted, lossy): ", "decoded+extracted (ai-compacted, lossy): "}
+	exact := []string{"encoded: ", "decoded: ", "decoded+extracted: "}
 	for _, line := range strings.Split(stderr, "\n") {
 		line = strings.TrimSpace(line)
-		for _, p := range prefixes {
+		matched := false
+		for _, p := range exact {
 			if strings.HasPrefix(line, p) {
 				out = append(out, strings.TrimPrefix(line, p))
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		// Parenthesized decode notes carry variable content — e.g.
+		// "decoded (ai-compacted, lossy): <path>" and v5.5's
+		// "decoded (media-fit jpeg q=NN — ...): <path>" — so match the shape,
+		// not an exact prefix list that silently goes stale.
+		if strings.HasPrefix(line, "decoded (") || strings.HasPrefix(line, "decoded+extracted (") {
+			if i := strings.Index(line, "): "); i >= 0 {
+				out = append(out, line[i+3:])
 			}
 		}
 	}
@@ -301,6 +317,7 @@ type encodeArgs struct {
 	Text   string   `json:"text"`
 	Mode   string   `json:"mode"`
 	Outdir string   `json:"outdir"`
+	Exact  bool     `json:"exact"`
 }
 type decodeArgs struct {
 	Artifacts []string `json:"artifacts"`
@@ -346,6 +363,9 @@ func doEncode(ctx context.Context, a encodeArgs, ai string) (interface{}, error)
 	}
 	timeout := encodeTimeout
 	lossy := false
+	if a.Exact {
+		args = append(args, "--exact")
+	}
 	switch ai {
 	case "native":
 		args = append(args, "--ai")
@@ -523,7 +543,7 @@ func doVerify(ctx context.Context, a oneArtifactArgs) (interface{}, error) {
 		return map[string]interface{}{"artifact": ap, "verified": false, "evidence": "FAILED", "error": "no output"}, nil
 	}
 	sum, _ := sha256File(restored[0])
-	lossy := man["lossy"] == "yes"
+	lossy := man["lossy"] != "" && man["lossy"] != "no"
 	out := map[string]interface{}{
 		"artifact":       ap,
 		"verified":       true,
@@ -531,7 +551,20 @@ func doVerify(ctx context.Context, a oneArtifactArgs) (interface{}, error) {
 		"restoredBytes":  fileSize(restored[0]),
 		"lossy":          lossy,
 	}
-	if src, ok := man["sha256"]; ok && !lossy {
+	if fitRef, ok := man["fit-sha256"]; ok {
+		// v5.5 media-fit: restored bytes are the fitted JPEG; integrity target
+		// is fit-sha256, while manifest sha256 stays the source's provenance.
+		match := subtle.ConstantTimeCompare([]byte(fitRef), []byte(sum)) == 1
+		out["fitSha256"] = fitRef
+		out["match"] = match
+		if match {
+			out["evidence"] = "RUNTIME_VERIFIED_FIT"
+			out["note"] = "media-fit artifact: restored JPEG matches fit-sha256; visually equivalent, NOT byte-identical to source"
+		} else {
+			out["evidence"] = "MISMATCH"
+			out["verified"] = false
+		}
+	} else if src, ok := man["sha256"]; ok && !lossy {
 		match := subtle.ConstantTimeCompare([]byte(src), []byte(sum)) == 1
 		out["sourceSha256"] = src
 		out["match"] = match
@@ -560,13 +593,14 @@ func doCapabilities() (interface{}, error) {
 	}
 	sv, _, _ := runSmash(context.Background(), 10*time.Second, "-V")
 	return map[string]interface{}{
-		"mcp":          "smash-mcp v" + version,
-		"proto":        protocolVersion,
-		"engine":       strings.TrimSpace(sv),
-		"binary":       smashBin,
-		"losslessModes": modes,
+		"mcp":            "smash-mcp v" + version,
+		"proto":          protocolVersion,
+		"engine":         strings.TrimSpace(sv),
+		"binary":         smashBin,
+		"losslessModes":  modes,
+		"mediaFit":       "v5.5: JPEG sources whose lossless artifact would exceed the source auto re-encode (sips, descending quality) until artifact < source; lossy: visual-fit + fit-sha256 in manifest; exact:true disables",
 		"artifactFormat": "<name>.smash.txt (ASCII manifest + base64 payload)",
-		"transports":   []string{"stdio", "http-loopback"},
+		"transports":     []string{"stdio", "http-loopback"},
 		"limits": map[string]interface{}{
 			"maxBatchItems": maxBatchItems, "maxInlineTextBytes": maxInlineText,
 			"encodeTimeoutSec": int(encodeTimeout / time.Second), "aiApiTimeoutSec": int(aiAPITimeout / time.Second),
@@ -726,7 +760,7 @@ func handle(ctx context.Context, req *rpcRequest) *rpcResponse {
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
 			"serverInfo":      map[string]interface{}{"name": "smash-mcp", "version": version},
-			"instructions": "smash compresses/encodes any content into terminal-safe, LLM-readable .txt artifacts and restores them. Results are paths + metadata, never content dumps. Lossless: smash_encode/decode/verify. Lossy: smash_ai_compress. Use smash_batch for many jobs in one call.",
+			"instructions":    "smash compresses/encodes any content into terminal-safe, LLM-readable .txt artifacts and restores them. Results are paths + metadata, never content dumps. Lossless: smash_encode/decode/verify (v5.5: JPEGs auto media-fit to guarantee artifact < source — manifest-declared visual-fit re-encode; exact:true forces byte-lossless). Lossy: smash_ai_compress. Use smash_batch for many jobs in one call.",
 		}
 	case "notifications/initialized", "initialized", "notifications/cancelled":
 		return nil

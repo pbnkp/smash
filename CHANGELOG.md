@@ -4,6 +4,62 @@ All notable changes to smash are documented here.
 
 ---
 
+## v5.5 — 2026-08-14 (CLI + web + MCP 1.2) — "never bigger"
+
+The trigger: a 166,505-byte JPEG smashed on web v5.4 produced a 221,474-byte
+artifact (+33%). Root cause is arithmetic, not a bug: base64 is a hard x1.333
+(printable-ASCII floor: x1.218) and gzip/xz find zero slack in entropy-coded
+data, so a byte-lossless ASCII artifact of an already-compressed source is
+MATHEMATICALLY always bigger than that source. v5.5 makes smash stop
+pretending otherwise.
+
+### Added
+- **Media-fit (CLI + web).** When the lossless payload cannot beat the source
+  and the source is a JPEG, smash re-encodes the image at descending quality
+  (CLI: native `sips`, q 85→35; web: canvas `toBlob`, q .85→.35) until the
+  WHOLE artifact (manifest + payload) is strictly smaller than the source.
+  First quality that fits wins, preserving maximum fidelity. Result is
+  visually equivalent, NOT byte-identical — declared loudly:
+  `lossy: visual-fit`, a `# fit:` manifest line with `fit-bytes` +
+  `fit-sha256` (restored-bytes integrity target; `sha256:` stays the SOURCE
+  hash for provenance), and the restored file is named `<name>.fit.jpg` so it
+  never impersonates the original. CLI and web fit artifacts decode
+  interchangeably (verified both directions). Reference file: 166,505B JPEG →
+  160,145B artifact via CLI (96%, q75), 112,540B via web (68%, q85 — canvas
+  encodes tighter than sips).
+- **`--exact` (CLI) / `exact:true` (MCP).** Forbid media-fit: byte-lossless
+  artifact even when bigger. `--fit` extends auto-fit to any raster sips
+  reads (PNG/TIFF/BMP/HEIC/WebP → fitted JPEG; flattens transparency —
+  that's why it's opt-in).
+- **INFLATED warning.** Non-media already-compressed inputs (zip, video,
+  encrypted) still encode losslessly — nothing smaller is possible — but now
+  warn loudly instead of silently shipping a bigger artifact. Hosts without
+  sips (FreeBSD) do the same for images.
+- **MCP `smash_verify` fit awareness.** Media-fit artifacts verify restored
+  sha256 against `fit-sha256` → `RUNTIME_VERIFIED_FIT|MISMATCH`; lossless
+  behavior unchanged. `lossy` detection now treats any non-"no" value as
+  lossy. `smash_encode` gained the `exact` option; capabilities report
+  `mediaFit`.
+
+### Fixed
+- **Web decode of artifacts >64KB (latent since the v5.4 streaming
+  rewrite).** Smash payloads are ONE giant base64 line; the header parser
+  booked every byte read while waiting for a newline as "header" and tripped
+  the 65,536-byte header cap, so web decode of any large single-line artifact
+  (including every CLI artifact) failed with "header exceeds 65536 bytes". A
+  partial line that cannot be a `#` header line is now recognized as payload
+  immediately. Verified: 160KB CLI `-g` fit artifact decodes in-browser with
+  fit-sha256 match.
+- **Web now names xz/zstd artifacts plainly.** Instead of DecompressionStream's
+  cryptic "incorrect header check", decoding a non-gzip artifact reports:
+  "this artifact is xz-compressed — browsers only decode gzip; restore it
+  with the CLI".
+- **MCP `parseOutputs` matched decode lines by exact prefix** and missed any
+  parenthesized variant with variable content (bit first on media-fit's
+  `decoded (media-fit jpeg q=NN — ...)`); now matches the line shape.
+
+---
+
 ## web v5.4 — 2026-08-13
 
 Streaming rewrite of the web app (`ui/web/`). The CLI itself is unchanged

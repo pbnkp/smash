@@ -86,12 +86,36 @@ smash                           # interactive paste mode (Ctrl+D to finish)
 | `--ai-api` | LLM API compression. Needs API key. ~5-10% of input. |
 | `--level N` | Compression level override (xz/gz `1-9`, zstd `1-19`) |
 | `--threads N` | xz/zstd thread count (default `0` = all cores) |
+| `--exact` | Never media-fit: byte-lossless artifact even when it comes out bigger than an already-compressed source |
+| `--fit` | Extend automatic media-fit to any raster sips reads (PNG/TIFF/BMP/HEIC/WebP → fitted JPEG; flattens transparency) |
 | `-q`, `--quiet` | Suppress progress output (errors still print) |
 | `-s "text"` | Encode a string instead of a file |
 | `-o`, `--output` | Output directory (multi-input / trailing `/`), exact path (single decode), or filename prefix (single encode) |
 | `--edit` | Open `$VISUAL`/`$EDITOR` (multi-word safe); falls back nano→pico→vi→vim |
 | `-V`, `--version` | Print version and exit |
 | `--` | End of options; everything after is an operand (dash-safe filenames) |
+
+### Media-fit (v5.5): artifacts never silently outgrow their source
+
+A byte-lossless printable-ASCII artifact of an already-compressed file is
+mathematically always bigger than that file: base64 is a hard ×1.333
+(printable-ASCII floor: ×1.218) and xz/gzip find no slack in entropy-coded
+data. smash v5.5 stops pretending otherwise:
+
+- **JPEG sources** whose lossless artifact would be ≥ the source are
+  automatically re-encoded via the native imaging stack (`sips` on macOS;
+  canvas in the web app) at descending quality until the whole artifact is
+  strictly **smaller** than the source. The first quality that fits wins.
+  The result is visually equivalent, NOT byte-identical, and the manifest
+  says so loudly: `lossy: visual-fit`, plus a `# fit:` line carrying
+  `fit-bytes` and `fit-sha256` (the integrity target for restored bytes —
+  `sha256:` remains the original source hash for provenance). Restores as
+  `<name>.fit.jpg`, never impersonating the original.
+- **Other already-compressed inputs** (zip, video, encrypted blobs — and
+  images on hosts without sips) still encode losslessly, but warn
+  `INFLATED` instead of silently shipping a bigger artifact.
+- `--exact` restores the old always-byte-lossless behavior; `--fit` widens
+  auto-fit to other raster formats.
 
 ---
 

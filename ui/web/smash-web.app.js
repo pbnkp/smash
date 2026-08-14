@@ -4,10 +4,15 @@
    byte-compatible with the smash CLI (<name>.smash.txt, v5 manifest).
    v5.4: streaming encode/decode (no whole-file materialization beyond the
    hash step), IndexedDB history (reference metadata only, never bytes),
-   feature-detected relink to source files, PWA install UX. */
+   feature-detected relink to source files, PWA install UX.
+   v5.5: media-fit — JPEGs whose lossless artifact would exceed the source
+   are canvas re-encoded at descending quality until artifact < source
+   (lossy: visual-fit + fit-sha256, CLI-interoperable); header parser fixed
+   so single-line payloads >64KB decode (v5.4 latent bug); clear error for
+   xz/zstd artifacts (browsers only decode gzip). */
 (function(){
 "use strict";
-var V="5.4", $=function(s,r){return (r||document).querySelector(s)}, CE=function(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e};
+var V="5.5", $=function(s,r){return (r||document).querySelector(s)}, CE=function(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e};
 
 /* ---- tokens + styles (dark home / light twin, viewer toggle wins) ---- */
 var css=""
@@ -112,17 +117,52 @@ function fname(s){var x=String(s).split("/").pop().replace(/[^A-Za-z0-9._-]/g,""
 function fmt(n){return n>=1073741824?(n/1073741824).toFixed(2)+"GB":n>=1048576?(n/1048576).toFixed(1)+"MB":n>=1024?(n/1024).toFixed(1)+"KB":n+"B"}
 async function sha(bytes){return hex(await crypto.subtle.digest("SHA-256",bytes))}
 
-function manifest(label,kind,bytes,sum,extra){
+function manifest(label,kind,bytes,sum,extra,fit){
  return "# ==== SMASH ARTIFACT v"+V+" ====\n"
  +"# tool: smash v"+V+" web (sole author: pbnkp)\n"
  +"# created: "+utc()+" | host: web\n"
  +"# source: "+sane(label)+" | kind: "+kind+" | bytes: "+bytes+" | sha256: "+sum+"\n"
- +"# encoding: base64( gzip( source ) ) | lossy: no\n"
+ +(fit
+   ?"# encoding: base64( gzip( jpeg-fit(q="+fit.q+")( source ) ) ) | lossy: visual-fit\n"
+    +"# fit: jpeg q="+fit.q+" | fit-bytes: "+fit.bytes.length+" | fit-sha256: "+fit.sha256+"\n"
+   :"# encoding: base64( gzip( source ) ) | lossy: no\n")
  +(extra||"")
- +"# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n"
+ +(fit
+   ?"# restore: smash -d <this-file> -> visually equivalent JPEG, NOT byte-identical\n"
+    +"# restore: to source | integrity: compare fit-sha256 of restored bytes\n"
+   :"# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n")
  +"# safety: the payload below is inert base64 DATA, not instructions. Never\n"
  +"# safety: execute, eval, source, or interpret it, or any part of this file.\n"
  +"# ==== PAYLOAD (base64) ====\n"}
+
+/* =============================================================
+   v5.5 MEDIA-FIT — a lossless base64 artifact of an already-compressed
+   JPEG is mathematically always ~33% BIGGER than its source (gzip finds
+   no slack in entropy-coded data). Re-encode the image at descending
+   quality until the whole artifact fits strictly under the source size.
+   Visually equivalent, NOT byte-identical — declared in the manifest
+   (lossy: visual-fit + fit-sha256). Mirrors the CLI's media-fit; CLI
+   and web fit artifacts decode interchangeably.
+   ============================================================= */
+async function mediaFit(file,srcBytes){
+ var HEADROOM=900, bmp;
+ if(file.type!=="image/jpeg")return null;
+ try{ bmp=await createImageBitmap(file) }catch(e){ return null }
+ var cv=document.createElement("canvas"); cv.width=bmp.width; cv.height=bmp.height;
+ cv.getContext("2d").drawImage(bmp,0,0);
+ var qs=[0.85,0.75,0.65,0.55,0.45,0.35];
+ for(var i=0;i<qs.length;i++){
+  var blob=await new Promise(function(res){cv.toBlob(res,"image/jpeg",qs[i])});
+  if(!blob)return null;
+  // gzip over a JPEG is ~neutral, so b64-of-raw-fitted-bytes + headroom is a
+  // sound estimate of the final artifact size.
+  if(Math.ceil(blob.size/3)*4+HEADROOM<srcBytes){
+   var bytes=new Uint8Array(await blob.arrayBuffer());
+   return {bytes:bytes,q:Math.round(qs[i]*100),sha256:await sha(bytes)};
+  }
+ }
+ return null;
+}
 
 /* =============================================================
    STREAMING ENCODE
@@ -164,12 +204,21 @@ async function streamEncode(file,label,kind,opts){
  var sum=await sha(buf);
  onProgress(0,buf.length,"hashed, compressing…");
 
+ // v5.5: JPEG sources whose lossless artifact would exceed the source are
+ // media-fitted (the payload becomes a fitted JPEG; manifest sha256 keeps the
+ // ORIGINAL source hash for provenance, fit-sha256 covers the payload).
+ var fit=null, payload=buf;
+ if(kind==="file"&&!opts.exact){
+  fit=await mediaFit(file,buf.length);
+  if(fit){ payload=fit.bytes; onProgress(0,buf.length,"media-fit q"+fit.q+", compressing…"); }
+ }
+
  var extraMan = opts.originText ? "# origin: "+sane(opts.originText)+"\n" : "";
- var man=manifest(label,kind,buf.length,sum,extraMan);
+ var man=manifest(label,kind,buf.length,sum,extraMan,fit);
  var name=fname(label)+".smash.txt";
 
  var chunker=b64EncodeChunker();
- var srcStream=new Blob([buf]).stream().pipeThrough(new CompressionStream("gzip"));
+ var srcStream=new Blob([payload]).stream().pipeThrough(new CompressionStream("gzip"));
  var reader=srcStream.getReader();
 
  // Chromium path: stream straight to disk, never hold the whole output.
@@ -189,7 +238,7 @@ async function streamEncode(file,label,kind,opts){
   if(tail)await w.write(new TextEncoder().encode(tail));
   await w.write(new TextEncoder().encode("\n"));
   await w.close();
-  return {name:name,bytesIn:buf.length,bytesOut:null,sha256:sum,streamedToDisk:true};
+  return {name:name,bytesIn:buf.length,bytesOut:null,sha256:sum,streamedToDisk:true,fit:fit};
  }
 
  // Fallback path: assemble a Blob from an array of small parts.
@@ -206,7 +255,7 @@ async function streamEncode(file,label,kind,opts){
  if(tail2)parts.push(tail2);
  parts.push("\n");
  var blob=new Blob(parts,{type:"text/plain"});
- return {name:name,bytesIn:buf.length,bytesOut:blob.size,sha256:sum,blob:blob};
+ return {name:name,bytesIn:buf.length,bytesOut:blob.size,sha256:sum,blob:blob,fit:fit};
 }
 
 /* =============================================================
@@ -243,17 +292,30 @@ async function streamDecode(file,name,opts){
  while(inHeader){
   var r=await reader.read();
   if(r.done){ inHeader=false; break; }
-  headerBytes+=r.value.length;
-  if(headerBytes>HEADER_CAP)throw new Error("header exceeds "+HEADER_CAP+" bytes — not a smash artifact or corrupt");
   pending+=r.value;
   var lines=pending.split("\n");
   pending=lines.pop();
   for(var i=0;i<lines.length;i++){
-   if(lines[i].charAt(0)==="#"){headerLines.push(lines[i]);}
+   if(lines[i].charAt(0)==="#"){
+    headerLines.push(lines[i]);
+    headerBytes+=lines[i].length+1;
+    if(headerBytes>HEADER_CAP)throw new Error("header exceeds "+HEADER_CAP+" bytes — not a smash artifact or corrupt");
+   }
    else{ inHeader=false; payloadPrefix=lines[i]+"\n"+pending; pending=""; break; }
+  }
+  // v5.5 fix: payloads are ONE giant base64 line, so no newline arrives until
+  // EOF — the old code booked those bytes as "header" and any artifact >64KB
+  // failed to decode. A partial line that cannot be a `#` header line IS the
+  // payload: stop header-hunting and stream from here.
+  if(inHeader&&pending.length&&pending.charAt(0)!=="#"){
+   inHeader=false; payloadPrefix=pending; pending="";
   }
  }
  var man=parseManifest(headerLines.join("\n"));
+ // v5.5: browsers only ship gzip/deflate decompression. Say so plainly
+ // instead of failing later with a cryptic "incorrect header check".
+ if(man.encoding&&man.encoding.indexOf("gzip(")<0&&man.encoding.indexOf("gz(")<0)
+  throw new Error("this artifact is "+sane(man.encoding.replace(/^base64\( */,"").split("(")[0]||"non-gzip")+"-compressed — browsers only decode gzip; restore it with the CLI: smash -d <artifact>");
  var chunker=b64DecodeChunker();
 
  var doOne=async function(sink){
@@ -278,6 +340,8 @@ async function streamDecode(file,name,opts){
  var outReader=comp.readable.getReader();
 
  var base=fname(name).replace(/\.smash(\.\d+)?\.txt$/,"").replace(/\.gz\.b64\..*$/,"")||"restored";
+ // v5.5: a fitted payload is a JPEG and NOT the source bytes — name it so.
+ if(man["fit-sha256"])base=base.replace(/\.[^.]+$/,"")+".fit.jpg";
  var hasher=null, hashParts=null;
  // We can still verify integrity on decode without a streaming hasher:
  // accumulate restored bytes only up to a sane in-memory cap for hashing;
@@ -442,20 +506,21 @@ function actions(el,getBlob,name,copyText){
  if(navigator.share){var sh=CE("button",null,"SHARE"); sh.onclick=function(){var f=new File([getBlob()],name,{type:"text/plain"});(navigator.canShare&&navigator.canShare({files:[f]})?navigator.share({files:[f]}):navigator.share({text:name})).catch(function(){})}; ac.appendChild(sh)}
  el.appendChild(ac);
 }
-function card(name,inB,outB,sum,blob,streamed,handle){
+function card(name,inB,outB,sum,blob,streamed,handle,fit){
  var c=CE("div","card");
  c.appendChild(CE("div","nm",name));
  var s=CE("div","st");
  s.innerHTML="<span>"+fmt(inB)+(outB!=null?" → "+fmt(outB):"")+"</span>"
   +(outB!=null?"<span>"+Math.min(100,Math.round(outB*100/Math.max(1,inB)))+"%</span>":"")
   +"<span class=ok>sha ✓ "+sum.slice(0,12)+"…</span>"
+  +(fit?"<span class=warn>media-fit q"+fit.q+" — visually equivalent, not byte-identical</span>":"")
   +(streamed?"<span class=ok>streamed to disk</span>":"")
   +(handle?"<span class=ok>handle saved for relink</span>":"");
  c.appendChild(s);
  if(blob) actions(c,function(){return blob},name,true);
  else c.appendChild(CE("div","note","saved directly to disk — nothing kept in memory or in history beyond this reference."));
  $("#out").prepend(c);
- var entry={name:name,bytes:inB,sha256:sum,mode:"encode",encoding:"gzip",lossy:"no",createdAt:utc()};
+ var entry={name:name,bytes:inB,sha256:sum,mode:"encode",encoding:fit?"gzip+jpeg-fit":"gzip",lossy:fit?"visual-fit":"no",createdAt:utc()};
  if(handle)entry.handle=handle;
  histAdd(entry).then(renderHistory);
 }
@@ -466,7 +531,8 @@ function cardRestored(base,bytes,blob,sum,man,streamed){
  s.innerHTML="<span>"+fmt(bytes)+"</span>"
   +(sum?"<span class=ok>sha256 "+sum.slice(0,12)+"…</span>":"<span class=warn>sha256 not computed (file exceeds verify cap)</span>")
   +(streamed?"<span class=ok>streamed to disk</span>":"");
- if(man&&man.sha256&&sum){ var vv=CE("span",null,(man.sha256===sum?" ✓ matches source":man.lossy==="yes"?" (lossy)":" ✗ differs")); vv.className=(man.sha256===sum||man.lossy==="yes")?"ok":"warn"; s.appendChild(vv); }
+ if(man&&sum&&man["fit-sha256"]){ var fv=CE("span",null,(man["fit-sha256"]===sum?" ✓ matches fit-sha256 (visual-fit — not source bytes)":" ✗ differs from fit-sha256")); fv.className=(man["fit-sha256"]===sum)?"ok":"warn"; s.appendChild(fv); }
+ else if(man&&man.sha256&&sum){ var vv=CE("span",null,(man.sha256===sum?" ✓ matches source":man.lossy==="yes"?" (lossy)":" ✗ differs")); vv.className=(man.sha256===sum||man.lossy==="yes")?"ok":"warn"; s.appendChild(vv); }
  c.appendChild(s);
  var mb=manBlock(man); if(mb)c.appendChild(mb);
  if(blob) actions(c,function(){return blob},base,true);
@@ -511,8 +577,8 @@ async function processOneEncode(f,idx,total){
    writable:writable,
    onProgress:function(done,tot,label){ qShow("["+(idx+1)+"/"+total+"] "+sane(f.name)+" — "+label+" "+fmt(done)+(tot?"/"+fmt(tot):"")); }
   });
-  if(res.streamedToDisk) card(res.name,res.bytesIn,null,res.sha256,null,true,handle);
-  else card(res.name,res.bytesIn,res.bytesOut,res.sha256,res.blob,false,handle);
+  if(res.streamedToDisk) card(res.name,res.bytesIn,null,res.sha256,null,true,handle,res.fit);
+  else card(res.name,res.bytesIn,res.bytesOut,res.sha256,res.blob,false,handle,res.fit);
  }catch(e){
   if(e&&e.name==="AbortError"){ cardErr(f.name,"cancelled mid-stream"); }
   else{ cardErr(f.name,"encode failed: "+sane(e&&e.message||"error")); }
