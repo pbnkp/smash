@@ -44,7 +44,7 @@ import (
 	"time"
 )
 
-const version = "1.2"
+const version = "1.3"
 const protocolVersion = "2025-06-18"
 
 // ---- limits (per-operation + transport) ----
@@ -119,13 +119,14 @@ func schema(props map[string]interface{}, required ...string) map[string]interfa
 var tools = []toolDef{
 	{"smash_capabilities", "List smash version, engine binary, compression modes, artifact format, transports, and per-operation limits.", schema(map[string]interface{}{})},
 	{"smash_health", "Liveness/readiness: confirm the smash engine binary is present and executes. Returns ok|degraded|down with detail.", schema(map[string]interface{}{})},
-	{"smash_encode", "Compress+encode files/directories (or inline text) into smash artifacts (<name>.smash.txt: ASCII manifest + base64 payload). Lossless by default; v5.5: a JPEG whose lossless artifact would exceed the source is auto media-fitted (visually equivalent re-encode, manifest-declared lossy: visual-fit + fit-sha256) so the artifact is always SMALLER than the source — pass exact:true to force byte-lossless even if bigger. Other already-compressed inputs warn INFLATED. Returns artifact paths, sizes, sha256 of source; never raw content.",
+	{"smash_encode", "Compress+encode files/directories (or inline text) into smash artifacts (<name>.smash.txt: ASCII manifest + text payload). LOSSLESS ALWAYS by default — v5.6: JPEG sources get a real lossless engine (jxl transcode, byte-exact proven by reconstruction, + Base85) and an artifact that still cannot beat an already-compressed source is reported INFLATED with the numbers, never silently quality-traded. fit:true is the ONLY path to a visually-equivalent quality trade (lossy: visual-fit + fit-sha256, explicit opt-in). Returns artifact paths, sizes, sha256 of source; never raw content.",
 		schema(map[string]interface{}{
 			"paths":  obj("type", "array", "items", obj("type", "string"), "description", "files or directories to encode"),
 			"text":   obj("type", "string", "description", "inline text to encode instead of paths"),
 			"mode":   obj("type", "string", "enum", []string{"xz", "gz", "zstd"}, "description", "lossless mode (default xz)"),
 			"outdir": obj("type", "string", "description", "output dir (must be inside an approved root)"),
-			"exact":  obj("type", "boolean", "description", "true = never media-fit; byte-lossless artifact even when bigger than an already-compressed source"),
+			"exact":  obj("type", "boolean", "description", "true = plain xz+base64 only (skip the jxl lossless stage; artifact decodable without djxl)"),
+			"fit":    obj("type", "boolean", "description", "true = EXPLICIT quality trade: visually-equivalent JPEG re-encode until artifact < source (lossy: visual-fit; never automatic)"),
 		})},
 	{"smash_ai_compress", "LOSSY semantic compression of text (mode 'native' = offline dictionary, ~25-40%; mode 'api' = LLM via smash's provider env). Returns artifact paths + sizes.",
 		schema(map[string]interface{}{
@@ -318,6 +319,7 @@ type encodeArgs struct {
 	Mode   string   `json:"mode"`
 	Outdir string   `json:"outdir"`
 	Exact  bool     `json:"exact"`
+	Fit    bool     `json:"fit"`
 }
 type decodeArgs struct {
 	Artifacts []string `json:"artifacts"`
@@ -365,6 +367,9 @@ func doEncode(ctx context.Context, a encodeArgs, ai string) (interface{}, error)
 	lossy := false
 	if a.Exact {
 		args = append(args, "--exact")
+	}
+	if a.Fit {
+		args = append(args, "--fit")
 	}
 	switch ai {
 	case "native":
@@ -598,7 +603,8 @@ func doCapabilities() (interface{}, error) {
 		"engine":         strings.TrimSpace(sv),
 		"binary":         smashBin,
 		"losslessModes":  modes,
-		"mediaFit":       "v5.5: JPEG sources whose lossless artifact would exceed the source auto re-encode (sips, descending quality) until artifact < source; lossy: visual-fit + fit-sha256 in manifest; exact:true disables",
+		"losslessEngine": "v5.6: JPEG sources whose lossless artifact would exceed the source run jxl lossless transcode (byte-exact, proven by reconstruction at encode time) + Base85 — smallest LOSSLESS artifact always wins; still-inflated results are reported honestly",
+		"mediaFit":       "v5.6: EXPLICIT opt-in only (fit:true / --fit): visually-equivalent JPEG re-encode until artifact < source; lossy: visual-fit + fit-sha256 in manifest; never automatic",
 		"artifactFormat": "<name>.smash.txt (ASCII manifest + base64 payload)",
 		"transports":     []string{"stdio", "http-loopback"},
 		"limits": map[string]interface{}{
@@ -760,7 +766,7 @@ func handle(ctx context.Context, req *rpcRequest) *rpcResponse {
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
 			"serverInfo":      map[string]interface{}{"name": "smash-mcp", "version": version},
-			"instructions":    "smash compresses/encodes any content into terminal-safe, LLM-readable .txt artifacts and restores them. Results are paths + metadata, never content dumps. Lossless: smash_encode/decode/verify (v5.5: JPEGs auto media-fit to guarantee artifact < source — manifest-declared visual-fit re-encode; exact:true forces byte-lossless). Lossy: smash_ai_compress. Use smash_batch for many jobs in one call.",
+			"instructions":    "smash compresses/encodes any content into terminal-safe, LLM-readable .txt artifacts and restores them. Results are paths + metadata, never content dumps. LOSSLESS ALWAYS by default: smash_encode/decode/verify (v5.6 engine: JPEGs get byte-exact jxl transcode + Base85; artifacts that still cannot beat an already-compressed source are reported INFLATED, never silently quality-traded). Explicit lossy opt-ins only: fit:true (visual-fit) and smash_ai_compress. Use smash_batch for many jobs in one call.",
 		}
 	case "notifications/initialized", "initialized", "notifications/cancelled":
 		return nil

@@ -4,6 +4,46 @@ All notable changes to smash are documented here.
 
 ---
 
+## v5.6 — 2026-08-14 (CLI + web + MCP 1.3) — "lossless always; no lipstick"
+
+Owner review of v5.5 called it straight: auto-degrading JPEG quality to win a
+size number is not compression engineering. v5.6 reverses the default and
+puts the real engineering in.
+
+### Changed
+- **LOSSLESS BY DEFAULT, ALWAYS.** v5.5's automatic media-fit is gone. `--fit`
+  (CLI), `fit:true` (MCP), and the FIT toggle (web, visibly OFF by default)
+  are now the ONLY paths to a quality trade — explicit, and still declared
+  in the manifest (`lossy: visual-fit` + `fit-sha256`).
+- `--exact` now means: plain xz+base64 only (skip the jxl stage too), for
+  artifacts decodable without djxl.
+- Web card no longer caps the ratio display at 100% — a 133% artifact says
+  133%, with an INFLATED chip instead of a silent number.
+
+### Added — the real lossless engine (CLI)
+- **jxl stage**: JPEG sources whose lossless artifact would exceed the source
+  are transcoded with JPEG XL's lossless JPEG mode (`cjxl -e 9`, typically
+  -16..22%). BYTE-EXACT is proven, not assumed: the JXL is reconstructed
+  with `djxl` and sha256-compared against the source at encode time; any
+  mismatch discards the stage. Requires cjxl+djxl (`brew install jpeg-xl`);
+  restore needs djxl (manifest says so).
+- **b85 stage**: Base85 payload alphabet (python3 stdlib), x1.25 overhead vs
+  base64's x1.333. Rides with the jxl chain.
+- Reference (166,505B banner): lossless artifact 222,490B (134%) in v5.5 →
+  **172,441B (103%)** in v5.6, restored byte-identical (sha256 match,
+  RUNTIME_VERIFIED through CLI and MCP).
+- **Honest INFLATED report**: when even the engine cannot beat the source,
+  smash prints the numbers and the reason — the printable-ASCII floor is
+  x1.218 over raw bytes, so a JPEG that recompresses less than ~22% can
+  never go under its own size as terminal-safe text. Measured on the
+  reference banner: best lossless recompression (137,289B) x the floor
+  already exceeds the source. No text encoding can fix that; only saying
+  it plainly can.
+- MCP 1.3: `smash_encode` gains `fit`; capabilities report `losslessEngine`;
+  descriptions rewritten around lossless-always.
+
+---
+
 ## v5.5 — 2026-08-14 (CLI + web + MCP 1.2) — "never bigger"
 
 The trigger: a 166,505-byte JPEG smashed on web v5.4 produced a 221,474-byte

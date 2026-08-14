@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smash v5.5 - Unified Encode/Decode Payload Manager
+# smash v5.6 - Unified Encode/Decode Payload Manager
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
 # Host: dual — FreeBSD 12.1 + macOS (darwin). bash 3.2-safe.
 #
@@ -10,13 +10,20 @@
 #   zstd     (-z)       — lossless, fast modern, opt-in
 #   ai       (--ai)     — native semantic compactor + xz, no API needed
 #   ai-api   (--ai-api) — LLM API compression + xz (lossy, ~5-10%)
-#   media-fit (v5.5, automatic) — JPEG sources whose lossless artifact would
-#     be >= the source are re-encoded (sips, descending quality) until the
-#     whole artifact is strictly SMALLER than the source. Visually
-#     equivalent, NOT byte-identical; declared in the manifest
-#     (lossy: visual-fit + fit-sha256). --exact disables; --fit widens to
-#     other rasters. Non-media incompressibles warn INFLATED (a lossless
-#     ASCII artifact of compressed data is mathematically always bigger).
+#
+# v5.6 LOSSLESS ENGINE for already-compressed sources (JPEG):
+#   jxl stage — lossless JPEG->JXL transcode (cjxl -e 9), typically -16..22%,
+#     BYTE-EXACT: reconstruction is proven with djxl + sha256 at encode time
+#     before the stage is ever adopted. Needs cjxl+djxl (brew install
+#     jpeg-xl) to encode and djxl to restore.
+#   b85 stage — Base85 payload alphabet (python3 stdlib) x1.25 overhead vs
+#     base64's x1.333. Rides with the jxl chain.
+#   The smallest LOSSLESS candidate always wins. If it is still >= the
+#   source, smash says INFLATED with the actual numbers — the printable-
+#   ASCII floor is x1.218, so a JPEG that recompresses less than ~22% can
+#   NEVER go under its own size as terminal-safe text. No silent quality
+#   loss, ever: --fit is the only path to a visually-equivalent re-encode
+#   (sips, declared as lossy: visual-fit + fit-sha256), and it is opt-in.
 #
 # v5.0 — the "many things in, one safe text file out" release:
 #   - MULTI-INPUT: smash f1 f2 dir/ f3 ... encodes each operand (no more
@@ -72,7 +79,7 @@ export PATH
 # straight to an rclone remote with no local artifact and bounded memory;
 # source bytes+sha256 ride in a trailing manifest (decoders are position-
 # agnostic). Lossless only. Transfer retry/parts/rate delegated to rclone.
-VERSION="5.5"
+VERSION="5.6"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -124,11 +131,13 @@ SINK=""               # --sink REMOTE:PATH : v5.3 stream artifacts to an rclone 
 SINK_VERIFY=0         # --sink-verify : re-download + decode + compare after upload
 ORIGIN=""             # --origin "<text>" : caller-supplied provenance
 ORIGIN_AUTO=0         # --origin-auto : also record cwd + invoking process
-EXACT=0               # --exact : never media-fit; byte-lossless even if bigger
-FIT_FORCE=0           # --fit : media-fit any raster sips reads (not just JPEG)
+EXACT=0               # --exact : plain xz+base64 only (skips jxl stage; never lossy)
+FIT_FORCE=0           # --fit : EXPLICIT visually-equivalent re-encode (never automatic)
 FIT_Q=""              # media-fit result: winning JPEG quality
 FIT_BYTES=""          # media-fit result: fitted JPEG byte count
 FIT_SUM=""            # media-fit result: sha256 of fitted JPEG payload
+ENC_ALPHA="base64"    # payload alphabet for the manifest (base64 | b85)
+ENC_CHAIN=""          # extra lossless stage for the manifest ("" | jxl)
 
 # Temp-path registry for cleanup traps (secrets-safe: everything staged in
 # $SMASH_TMP is removed on exit/interrupt).
@@ -145,11 +154,13 @@ TMP_TXT=""
 TMP_STDIN=""
 TMP_EXTRACT=""
 TMP_FIT=""
+TMP_JXL=""
 
 cleanup_all() {
   rm -f "${TMP_B64:-}" "${TMP_AI:-}" "${TMP_TAR:-}" \
         "${TMP_AF:-}" "${TMP_PAYLOAD:-}" "${TMP_CURLCFG:-}" "${TMP_FINAL:-}" \
-        "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" "${TMP_FIT:-}" 2>/dev/null
+        "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" "${TMP_FIT:-}" \
+        "${TMP_JXL:-}" "${TMP_JXL:+$TMP_JXL.jxl}" "${TMP_JXL:+$TMP_JXL.jpg}" 2>/dev/null
   [[ -z "${TMP_AIDIR:-}" ]] || rm -rf "$TMP_AIDIR"
   [[ -z "${TMP_EXTRACT:-}" ]] || rm -rf "$TMP_EXTRACT"
   return 0
@@ -158,7 +169,7 @@ trap cleanup_all EXIT INT HUP TERM
 
 usage() {
   cat 1>&2 <<'EOF'
-smash v5.5 — encode/decode payload manager
+smash v5.6 — encode/decode payload manager
 
 usage:
   smash <file> [file|dir ...]     encode each operand (xz, default)
@@ -192,11 +203,12 @@ options:
                   Anthropic. Needs an API key (or a local endpoint).
   --level N       Compression level override (xz/gz 1-9, zstd 1-19)
   --threads N     xz/zstd thread count (default 0 = all cores)
-  --exact         Never media-fit: byte-lossless artifact even when it comes
-                  out BIGGER than an already-compressed source
-  --fit           Extend automatic media-fit to any raster image sips can
-                  read (PNG/TIFF/BMP/HEIC/WebP -> fitted JPEG; flattens
-                  transparency). Default auto-fit covers JPEG sources only.
+  --exact         Skip the jxl lossless stage too: plain xz+base64 artifact
+                  (decodable anywhere, no djxl needed), even when bigger
+  --fit           DELIBERATE quality trade: re-encode a raster (sips,
+                  descending JPEG quality) until the artifact is smaller
+                  than the source. Visually equivalent, NOT byte-identical;
+                  declared as lossy: visual-fit. Never automatic.
   --sink R:PATH   Stream each artifact to an rclone remote destination
                   (e.g. myremote:bucket/path/). Encode-only,
                   lossless-only, no local artifact; source bytes+sha256
@@ -397,11 +409,70 @@ media_fit_encode() {
   return 1
 }
 
-# strip_manifest: reduce an artifact stream to bare base64.
+# strip_manifest: reduce an artifact stream to bare payload text.
 # Drops `#` manifest lines (v5+) and all whitespace/newlines, which also
 # accepts pre-v5 single-line artifacts and line-wrapped/pasted payloads.
 strip_manifest() {
   grep -v '^#' | LC_ALL=C tr -d ' \t\r\n'
+}
+
+# decode_payload <alpha>: artifact text on stdin -> raw compressed bytes.
+# base64 streams through openssl; b85 (v5.6 engine chains) needs python3.
+decode_payload() {
+  local alpha="${1:-base64}"
+  if [[ "$alpha" == "b85" ]]; then
+    command -v python3 >/dev/null 2>&1 \
+      || die "this artifact's payload is Base85 — decoding needs python3"
+    strip_manifest | python3 -c 'import sys,base64;sys.stdout.buffer.write(base64.b85decode(sys.stdin.buffer.read()))'
+  else
+    strip_manifest | openssl enc -d -base64 -A
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# v5.6 LOSSLESS ENGINE — try_jxl_lossless <src> <cur_payload_bytes>
+# Candidate chain for JPEG sources: cjxl -e 9 (lossless JPEG bitstream
+# transcode, typically -16..22%) -> xz -> Base85 (x1.25 overhead vs base64's
+# x1.333; python3 stdlib, base64 fallback). PROOF BEFORE ADOPTION: the JXL is
+# reconstructed with djxl and sha256-compared against the source — any
+# mismatch discards the stage. Adopted only when the payload SHRINKS, even
+# if the artifact stays >= source (smallest honest artifact always wins).
+# ---------------------------------------------------------------------------
+try_jxl_lossless() {
+  local src="$1" cur="$2" cand alpha="base64" jxl_f jpg_f tmp_cand
+  command -v cjxl >/dev/null 2>&1 || return 1
+  command -v djxl >/dev/null 2>&1 || return 1
+  TMP_JXL="$(mktemp "${SMASH_TMP}/smash.jxl.XXXXXX")"
+  jxl_f="$TMP_JXL.jxl"; jpg_f="$TMP_JXL.jpg"
+  if ! cjxl -e 9 "$src" "$jxl_f" >/dev/null 2>&1; then
+    rm -f "$TMP_JXL" "$jxl_f"; TMP_JXL=""; return 1
+  fi
+  if ! djxl "$jxl_f" "$jpg_f" >/dev/null 2>&1 \
+     || [[ "$(sha256_file "$jpg_f")" != "$(sha256_file "$src")" ]]; then
+    warn "jxl stage: reconstruction not byte-exact — stage discarded"
+    rm -f "$TMP_JXL" "$jxl_f" "$jpg_f"; TMP_JXL=""; return 1
+  fi
+  rm -f "$jpg_f"
+  tmp_cand="$(mktemp "${SMASH_TMP}/smash.jxlcand.XXXXXX")"
+  if python3 -c 'import base64' >/dev/null 2>&1; then
+    xz -9 -c "$jxl_f" \
+      | python3 -c 'import sys,base64;sys.stdout.buffer.write(base64.b85encode(sys.stdin.buffer.read()))' \
+      > "$tmp_cand"
+    alpha="b85"
+  else
+    xz -9 -c "$jxl_f" | openssl enc -base64 -A > "$tmp_cand"
+  fi
+  rm -f "$TMP_JXL" "$jxl_f"; TMP_JXL=""
+  cand=$(wc -c < "$tmp_cand" | tr -d ' ')
+  if [[ "$cand" -lt "$cur" ]]; then
+    mv -f "$tmp_cand" "$TMP_B64"
+    ENC_ALPHA="$alpha"; ENC_CHAIN="jxl"
+    info 'smash: engine: jxl lossless transcode (byte-exact, PROVEN by reconstruction) + %s: payload %sB -> %sB\n' \
+      "$alpha" "$cur" "$cand"
+    return 0
+  fi
+  rm -f "$tmp_cand"
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -541,25 +612,24 @@ encode_stream_to_sink() {
 }
 
 decode_to_tmp() {
-  local tmp_raw="$1" decomp="$2"
+  local tmp_raw="$1" decomp="$2" alpha="${3:-base64}"
   case "$decomp" in
-    zstd) strip_manifest | openssl enc -d -base64 -A | zstd -d -q -c > "$tmp_raw" ;;
-    gz)   strip_manifest | openssl enc -d -base64 -A | gunzip -c   > "$tmp_raw" ;;
-    *)    strip_manifest | openssl enc -d -base64 -A | xz -d -c    > "$tmp_raw" ;;
+    zstd) decode_payload "$alpha" | zstd -d -q -c > "$tmp_raw" ;;
+    gz)   decode_payload "$alpha" | gunzip -c   > "$tmp_raw" ;;
+    *)    decode_payload "$alpha" | xz -d -c    > "$tmp_raw" ;;
   esac
 }
 
 # verify_artifact: prove the exact assembled artifact (manifest + payload)
 # decodes back to a valid compressed stream. This is the shipped-bytes check.
 verify_artifact() {
-  local artifact="$1" comp="$2"
+  local artifact="$1" comp="$2" alpha="${3:-base64}"
   [[ -s "$artifact" ]] || return 1
 
   local tmp_archive rc=0
   tmp_archive="$(mktemp "${SMASH_TMP}/smash.verify.XXXXXX")"
 
-  if ! strip_manifest < "$artifact" \
-       | openssl enc -d -base64 -A > "$tmp_archive" 2>/dev/null; then
+  if ! decode_payload "$alpha" < "$artifact" > "$tmp_archive" 2>/dev/null; then
     rm -f "$tmp_archive"
     return 1
   fi
@@ -712,8 +782,12 @@ write_manifest() {
       printf '# fit: jpeg q=%s | fit-bytes: %s | fit-sha256: %s\n' "$(sn "$FIT_Q")" "$(sn "$FIT_BYTES")" "$FIT_SUM"
       printf '# restore: smash -d <this-file> -> visually equivalent JPEG, NOT byte-identical\n'
       printf '# restore: to source | integrity: compare fit-sha256 of restored bytes\n'
+    elif [[ "$ENC_CHAIN" == "jxl" ]]; then
+      printf '# encoding: %s( %s( jxl( source ) ) ) | lossy: no\n' "$(sn "${ENC_ALPHA:-base64}")" "$(sn "$ext")"
+      printf '# restore: smash -d <this-file> (jxl stage needs djxl — brew install jpeg-xl)\n'
+      printf '# restore: restores BYTE-IDENTICAL source | integrity: compare sha256 of restored bytes\n'
     else
-      printf '# encoding: base64( %s( source ) ) | lossy: %s\n' "$(sn "$ext")" "$lossy"
+      printf '# encoding: %s( %s( source ) ) | lossy: %s\n' "$(sn "${ENC_ALPHA:-base64}")" "$(sn "$ext")" "$lossy"
       printf '# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n'
     fi
     printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
@@ -1489,34 +1563,51 @@ encode_one() {
     encode_to_tmp "$TMP_B64" < "$src"
   fi
 
-  # v5.5: never silently ship an artifact bigger than its source. When the
-  # lossless payload cannot beat the source (already-compressed input): JPEG
-  # sources are media-fitted (visually equivalent re-encode, loudly declared);
-  # other rasters fit only on --fit; everything else warns INFLATED because
-  # lossless-smaller is mathematically impossible there.
-  FIT_Q=""; FIT_BYTES=""; FIT_SUM=""
-  if [[ -z "$use_ai" && "$kind" == "file" && "$src_bytes" -gt 0 && "$EXACT" -eq 0 ]]; then
-    local cand_bytes mt try_fit=0
+  # v5.6: never silently lossy, never silently inflated.
+  #   1. When the lossless payload cannot beat the source and the source is
+  #      a JPEG, run the REAL engine: jxl lossless transcode (byte-exact,
+  #      proven by reconstruction) + b85. Adopted whenever it SHRINKS the
+  #      payload — smallest honest artifact always wins, even if still
+  #      >= source.
+  #   2. --fit (explicit only) may then trade quality for size.
+  #   3. Otherwise report INFLATED with the actual numbers.
+  FIT_Q=""; FIT_BYTES=""; FIT_SUM=""; ENC_ALPHA="base64"; ENC_CHAIN=""
+  if [[ -z "$use_ai" && "$kind" == "file" && "$src_bytes" -gt 0 ]]; then
+    local cand_bytes mt=""
     cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
     if [[ $((cand_bytes + MANIFEST_HEADROOM)) -ge "$src_bytes" ]]; then
       mt="$(file -b --mime-type -- "$src" 2>/dev/null)"
-      case "$mt" in
-        image/jpeg) try_fit=1 ;;
-        image/*)    [[ "$FIT_FORCE" -eq 1 ]] && try_fit=1 ;;
-      esac
-      if [[ "$try_fit" -eq 1 ]]; then
-        info 'smash: lossless artifact would be >= source (%s is already compressed) — media-fit engaging (--exact to forbid)\n' "$(sn "$mt")"
-        if media_fit_encode "$src" "$src_bytes"; then
-          lossy="visual-fit"
-          info 'smash: media-fit: jpeg q=%s -> %sB payload (visually equivalent, NOT byte-identical)\n' "$FIT_Q" "$FIT_BYTES"
-        else
-          encode_to_tmp "$TMP_B64" < "$src"
-          warn "INFLATED: no JPEG quality fits under the source size — shipping byte-lossless artifact BIGGER than source"
+      if [[ "$mt" == "image/jpeg" && "$EXACT" -eq 0 ]]; then
+        if try_jxl_lossless "$src" "$cand_bytes"; then
+          cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
         fi
-      else
-        warn "INFLATED: $(sn "$label") is already-compressed data ($(sn "${mt:-unknown}")) — a lossless ASCII artifact is necessarily bigger than its source (base64 floor x1.33). It still restores byte-identical. (JPEGs media-fit automatically; other rasters need --fit)"
+      fi
+      if [[ $((cand_bytes + MANIFEST_HEADROOM)) -ge "$src_bytes" ]]; then
+        if [[ "$FIT_FORCE" -eq 1 ]]; then
+          case "$mt" in
+            image/*)
+              info 'smash: --fit: deliberate quality trade engaged (%s)\n' "$(sn "$mt")"
+              if media_fit_encode "$src" "$src_bytes"; then
+                lossy="visual-fit"; ENC_ALPHA="base64"; ENC_CHAIN=""
+                info 'smash: media-fit: jpeg q=%s -> %sB payload (visually equivalent, NOT byte-identical)\n' "$FIT_Q" "$FIT_BYTES"
+              else
+                encode_to_tmp "$TMP_B64" < "$src"; ENC_ALPHA="base64"; ENC_CHAIN=""
+                warn "INFLATED: no JPEG quality fits under the source size — shipping byte-lossless artifact instead"
+              fi
+              ;;
+            *) warn "--fit: not a raster image ($(sn "${mt:-unknown}")) — nothing to fit; artifact stays lossless" ;;
+          esac
+        else
+          warn "INFLATED: best LOSSLESS artifact ~$((cand_bytes + 700))B vs ${src_bytes}B source ($(( (cand_bytes + 700) * 100 / src_bytes ))%). $(sn "${mt:-unknown}") is already compressed; the printable-text floor (x1.218 over raw bytes) makes a smaller lossless text artifact impossible for this input. Restores byte-identical. Deliberate quality trade available: --fit"
+        fi
       fi
     fi
+  fi
+
+  # The jxl chain always compresses with xz, whatever mode was flagged.
+  local ship_comp="$COMPRESS_MODE"
+  if [[ "$ENC_CHAIN" == "jxl" ]]; then
+    ext_label="xz"; ship_comp="xz"
   fi
 
   # Assemble final artifact: manifest header + payload + trailing newline.
@@ -1527,7 +1618,7 @@ encode_one() {
   rm -f "$TMP_B64"; TMP_B64=""
 
   # Verify the exact bytes we are about to ship decode cleanly.
-  if ! verify_artifact "$TMP_FINAL" "$COMPRESS_MODE"; then
+  if ! verify_artifact "$TMP_FINAL" "$ship_comp" "$ENC_ALPHA"; then
     die "verify failed: artifact corrupt. staged file: $TMP_FINAL"
   fi
 
@@ -1703,6 +1794,16 @@ decode_one() {
     fit_q="$(sed -n 's/^# fit: jpeg q=\([0-9]*\).*/\1/p' "$infile" | head -n 1)"
   fi
 
+  # v5.6 engine chains: Base85 payload alphabet and/or a jxl lossless stage
+  # (byte-identical reconstruction via djxl).
+  local alpha="base64" is_jxl=0
+  case "$manifest_encoding" in b85\(*) alpha="b85" ;; esac
+  if [[ "$manifest_encoding" == *"jxl("* ]]; then
+    is_jxl=1
+    command -v djxl >/dev/null 2>&1 \
+      || die "this artifact has a jxl lossless stage — restoring needs djxl (brew install jpeg-xl)"
+  fi
+
   # Fail fast if the decoder for this payload isn't installed on this host.
   [[ "$decomp" != "zstd" ]] || command -v zstd >/dev/null 2>&1 || die "decoding .zst payloads requires zstd"
 
@@ -1746,9 +1847,17 @@ decode_one() {
 
   TMP_OUT="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX")"
 
-  decode_to_tmp "$TMP_OUT" "$decomp" < "$infile" || die "decompression or decode failed: $(sn "$infile")"
+  decode_to_tmp "$TMP_OUT" "$decomp" "$alpha" < "$infile" || die "decompression or decode failed: $(sn "$infile")"
   if [[ ! -s "$TMP_OUT" ]]; then
     warn "note: $(sn "$name") restored as an empty file (source was empty)"
+  fi
+
+  # v5.6: reconstruct the byte-identical original JPEG from the jxl stage.
+  if [[ "$is_jxl" -eq 1 ]]; then
+    local jxl_jpg="${TMP_OUT}.jpg"
+    djxl "$TMP_OUT" "$jxl_jpg" >/dev/null 2>&1 \
+      || die "djxl reconstruction failed: $(sn "$infile")"
+    mv -f "$jxl_jpg" "$TMP_OUT"
   fi
 
   # v5.1: decoding a single file INTO a web-served/live dir stays allowed
@@ -1787,6 +1896,8 @@ decode_one() {
   elif [[ "$is_fit" -eq 1 ]]; then
     info 'decoded (media-fit jpeg q=%s — visually equivalent, NOT byte-identical to source): %s\n' \
       "$(sn "${fit_q:-?}")" "$(sn "$out_path")"
+  elif [[ "$is_jxl" -eq 1 ]]; then
+    info 'decoded (jxl lossless stage reconstructed — byte-identical to source): %s\n' "$(sn "$out_path")"
   elif [[ "$is_ai" -eq 1 ]]; then
     info 'decoded (ai-compacted, lossy): %s\n' "$(sn "$out_path")"
   else

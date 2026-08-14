@@ -9,10 +9,14 @@
    are canvas re-encoded at descending quality until artifact < source
    (lossy: visual-fit + fit-sha256, CLI-interoperable); header parser fixed
    so single-line payloads >64KB decode (v5.4 latent bug); clear error for
-   xz/zstd artifacts (browsers only decode gzip). */
+   xz/zstd artifacts (browsers only decode gzip).
+   v5.6: LOSSLESS BY DEFAULT, always — media-fit runs only via the explicit
+   FIT toggle (never automatically), and an artifact that cannot beat an
+   already-compressed source is labeled INFLATED instead of silently traded
+   down in quality. The CLI carries the real lossless engine (jxl+b85). */
 (function(){
 "use strict";
-var V="5.5", $=function(s,r){return (r||document).querySelector(s)}, CE=function(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e};
+var V="5.6", $=function(s,r){return (r||document).querySelector(s)}, CE=function(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e};
 
 /* ---- tokens + styles (dark home / light twin, viewer toggle wins) ---- */
 var css=""
@@ -91,8 +95,8 @@ root.innerHTML=
 +"<div class=sub>files to smash &mdash; or a smash artifact to restore</div>"
 +"<input id=fp type=file multiple></div>"
 +"<textarea id=ta class=mono placeholder='or paste text / an artifact here'></textarea>"
-+"<div class=row><button id=go>SMASH&nbsp;IT</button><button id=tt aria-label='toggle text input'>TEXT</button></div>"
-+"<p class=note>Everything runs on this device. Nothing is uploaded. Large files stream through — nothing is ever fully buffered except the pass needed to compute a true sha256. gzip artifacts interop with the smash CLI.</p>"
++"<div class=row><button id=go>SMASH&nbsp;IT</button><button id=tt aria-label='toggle text input'>TEXT</button><button id=ft aria-pressed=false aria-label='toggle media-fit quality trade'>FIT OFF</button></div>"
++"<p class=note>Everything runs on this device. Nothing is uploaded. Large files stream through — nothing is ever fully buffered except the pass needed to compute a true sha256. gzip artifacts interop with the smash CLI. Encoding is LOSSLESS by default — FIT is an explicit quality trade (visually equivalent re-encode, declared in the manifest) for when smaller matters more than byte-identical.</p>"
 +"<div id=q hidden role=status aria-live=polite><span id=qtxt class=mono></span><button id=cancel>CANCEL</button></div>"
 +"<div id=inst role=status><span id=insttxt></span><button id=instgo>INSTALL</button><button class=x id=instx aria-label=dismiss>&times;</button></div>"
 +"<section id=out aria-live=polite></section>"
@@ -204,11 +208,12 @@ async function streamEncode(file,label,kind,opts){
  var sum=await sha(buf);
  onProgress(0,buf.length,"hashed, compressing…");
 
- // v5.5: JPEG sources whose lossless artifact would exceed the source are
- // media-fitted (the payload becomes a fitted JPEG; manifest sha256 keeps the
- // ORIGINAL source hash for provenance, fit-sha256 covers the payload).
+ // v5.6: LOSSLESS by default, always. Media-fit (the payload becomes a
+ // quality-reduced JPEG; manifest sha256 keeps the ORIGINAL source hash for
+ // provenance, fit-sha256 covers the payload) runs ONLY when the user has
+ // explicitly enabled the FIT toggle — never automatically.
  var fit=null, payload=buf;
- if(kind==="file"&&!opts.exact){
+ if(kind==="file"&&opts.fit){
   fit=await mediaFit(file,buf.length);
   if(fit){ payload=fit.bytes; onProgress(0,buf.length,"media-fit q"+fit.q+", compressing…"); }
  }
@@ -511,9 +516,10 @@ function card(name,inB,outB,sum,blob,streamed,handle,fit){
  c.appendChild(CE("div","nm",name));
  var s=CE("div","st");
  s.innerHTML="<span>"+fmt(inB)+(outB!=null?" → "+fmt(outB):"")+"</span>"
-  +(outB!=null?"<span>"+Math.min(100,Math.round(outB*100/Math.max(1,inB)))+"%</span>":"")
+  +(outB!=null?"<span>"+Math.round(outB*100/Math.max(1,inB))+"%</span>":"")
   +"<span class=ok>sha ✓ "+sum.slice(0,12)+"…</span>"
   +(fit?"<span class=warn>media-fit q"+fit.q+" — visually equivalent, not byte-identical</span>":"")
+  +(!fit&&outB!=null&&outB>=inB?"<span class=warn>INFLATED — lossless of an already-compressed source; the CLI engine (jxl+b85) does better, or enable FIT for a declared quality trade</span>":"")
   +(streamed?"<span class=ok>streamed to disk</span>":"")
   +(handle?"<span class=ok>handle saved for relink</span>":"");
  c.appendChild(s);
@@ -575,6 +581,7 @@ async function processOneEncode(f,idx,total){
   var res=await streamEncode(f,f.name,"file",{
    signal:currentAbort.signal,
    writable:writable,
+   fit:fitOn,
    onProgress:function(done,tot,label){ qShow("["+(idx+1)+"/"+total+"] "+sane(f.name)+" — "+label+" "+fmt(done)+(tot?"/"+fmt(tot):"")); }
   });
   if(res.streamedToDisk) card(res.name,res.bytesIn,null,res.sha256,null,true,handle,res.fit);
@@ -658,6 +665,14 @@ async function pickFiles(){
 $("#plate").onclick=function(){ pickFiles().then(function(files){ if(files.length)handleFiles(files); }); };
 $("#plate").onkeydown=function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#plate").click()}};
 $("#go").onclick=go;
+var fitOn=false;
+$("#ft").onclick=function(){
+ fitOn=!fitOn;
+ this.textContent=fitOn?"FIT ON":"FIT OFF";
+ this.setAttribute("aria-pressed",fitOn?"true":"false");
+ this.style.color=fitOn?"#ff6a2b":"";
+ this.style.borderColor=fitOn?"#ff6a2b":"";
+};
 $("#cancel").onclick=function(){cancelFlag=true; if(currentAbort)currentAbort.abort(); $("#qtxt").textContent+=" — cancelling…"};
 $("#tt").onclick=function(){var ta=$("#ta");ta.style.display=ta.style.display==="block"?"none":"block";if(ta.style.display==="block")ta.focus()};
 ["dragover","dragenter"].forEach(function(ev){document.addEventListener(ev,function(e){e.preventDefault();$("#plate").classList.add("over")})});

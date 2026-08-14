@@ -1,8 +1,8 @@
 {
-  "version": "5.5",
+  "version": "5.6",
   "assets": {
-    "index.html": "a95273e9a662446fc4aae88a4ce82feb84aa6e0166d47215b8f548c892540455",
-    "app.min.js": "72fd7958b5180eb08503ff0502cfcfab17e26c02754c7447aefd2f8c11fe10df",
+    "index.html": "1b12b557ff6a44e9a0a093a11e3e8051273c68baa796b285ac3b249e3be9a16c",
+    "app.min.js": "18090bab6c6ac40d978b57b06ef8008ae8dd7c9ec5bb9df1e3bf8970a48c18f7",
     "manifest.webmanifest": "8f035e8fd81f94ea2da5951e1d89b1c4d6f748cabed154d9f4c8b437417c22f4",
     "icon.svg": "e2ac64cea67dba10de68249bba74f5e2f83a145e1b598b9649303d4d01477c39"
   }

@@ -86,8 +86,8 @@ smash                           # interactive paste mode (Ctrl+D to finish)
 | `--ai-api` | LLM API compression. Needs API key. ~5-10% of input. |
 | `--level N` | Compression level override (xz/gz `1-9`, zstd `1-19`) |
 | `--threads N` | xz/zstd thread count (default `0` = all cores) |
-| `--exact` | Never media-fit: byte-lossless artifact even when it comes out bigger than an already-compressed source |
-| `--fit` | Extend automatic media-fit to any raster sips reads (PNG/TIFF/BMP/HEIC/WebP → fitted JPEG; flattens transparency) |
+| `--exact` | Plain xz+base64 only: skip the jxl lossless stage (artifact decodable without djxl), even when bigger |
+| `--fit` | EXPLICIT quality trade (never automatic): visually-equivalent JPEG re-encode until the artifact is smaller than the source; declared `lossy: visual-fit` |
 | `-q`, `--quiet` | Suppress progress output (errors still print) |
 | `-s "text"` | Encode a string instead of a file |
 | `-o`, `--output` | Output directory (multi-input / trailing `/`), exact path (single decode), or filename prefix (single encode) |
@@ -95,27 +95,34 @@ smash                           # interactive paste mode (Ctrl+D to finish)
 | `-V`, `--version` | Print version and exit |
 | `--` | End of options; everything after is an operand (dash-safe filenames) |
 
-### Media-fit (v5.5): artifacts never silently outgrow their source
+### The lossless engine (v5.6): honest physics, no silent quality loss
 
 A byte-lossless printable-ASCII artifact of an already-compressed file is
-mathematically always bigger than that file: base64 is a hard ×1.333
-(printable-ASCII floor: ×1.218) and xz/gzip find no slack in entropy-coded
-data. smash v5.5 stops pretending otherwise:
+mathematically always bigger than that file: base64 is a hard ×1.333, the
+printable-ASCII floor is ×1.218, and xz/gzip find no slack in entropy-coded
+data. smash is honest about this and engineers against it losslessly:
 
-- **JPEG sources** whose lossless artifact would be ≥ the source are
-  automatically re-encoded via the native imaging stack (`sips` on macOS;
-  canvas in the web app) at descending quality until the whole artifact is
-  strictly **smaller** than the source. The first quality that fits wins.
-  The result is visually equivalent, NOT byte-identical, and the manifest
-  says so loudly: `lossy: visual-fit`, plus a `# fit:` line carrying
-  `fit-bytes` and `fit-sha256` (the integrity target for restored bytes —
-  `sha256:` remains the original source hash for provenance). Restores as
+- **jxl stage** — JPEG sources whose lossless artifact would exceed the
+  source are transcoded with JPEG XL's lossless JPEG mode (`cjxl -e 9`,
+  typically −16–22%, byte-exact). The reconstruction is PROVEN at encode
+  time (`djxl` + sha256 vs source) before the stage is adopted. Needs
+  `brew install jpeg-xl`; restoring needs `djxl` (the manifest says so).
+- **b85 stage** — Base85 payload alphabet (×1.25 overhead instead of
+  base64's ×1.333), python3 stdlib. Rides with the jxl chain.
+- Reference: a 166,505B banner JPEG → 222,490B lossless artifact without
+  the engine, **172,441B (103%) with it — restored byte-identical**.
+- **INFLATED, said plainly**: when even that cannot beat the source (a JPEG
+  recompressing under ~22% can never go below its own size as terminal-safe
+  text — the floor forbids it), smash prints the numbers instead of
+  pretending. Encoding is lossless always; the artifact simply is what the
+  math allows.
+- **`--fit` — the explicit, never-automatic quality trade**: re-encode a
+  raster (sips, descending JPEG quality) until the artifact is smaller than
+  the source. Visually equivalent, NOT byte-identical; declared as
+  `lossy: visual-fit` with `fit-sha256` as the restored-bytes integrity
+  target (`sha256:` stays the source hash for provenance). Restores as
   `<name>.fit.jpg`, never impersonating the original.
-- **Other already-compressed inputs** (zip, video, encrypted blobs — and
-  images on hosts without sips) still encode losslessly, but warn
-  `INFLATED` instead of silently shipping a bigger artifact.
-- `--exact` restores the old always-byte-lossless behavior; `--fit` widens
-  auto-fit to other raster formats.
+- `--exact`: plain xz+base64 only — artifact decodable anywhere, no djxl.
 
 ---
 
