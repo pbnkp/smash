@@ -1,0 +1,1 @@
+export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/bin:${PATH:-}"; export B64_OUTDIR="$HOME/smashes"; for f in "$@"; do "/Users/piggy/bin/smash" -q --redact "$f"; done

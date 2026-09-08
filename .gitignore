@@ -1,4 +1,7 @@
-ui/macos/dist-mac/
-ui/web/dist/*.tmp
-*.bak
-mcp/smash-mcp/smash-mcp
+.DS_Store
+# Swift / Xcode build output
+.build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+apps/*/build/

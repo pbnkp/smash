@@ -931,6 +931,11 @@ sp_try() {
   command -v python3 >/dev/null 2>&1 || return 1
   # An explicit --level/--threads is the user pinning the codec; respect it.
   [[ -z "$LEVEL" && -z "$THREADS" ]] || return 1
+  # So is an explicit -g/-z. Someone asking for gzip wants a gzip artifact --
+  # usually for a reader that can only invert that one format (the iOS app
+  # decodes gzip natively and nothing else) -- so silently shipping brotli
+  # because it is smaller would defeat the entire reason they asked.
+  [[ "$COMPRESS_MODE" == "xz" ]] || return 1
 
   # Encode-time verification has to be able to UNDO maybe_encrypt, or every
   # candidate fails its round-trip and the whole engine silently falls back to
@@ -1384,6 +1389,7 @@ origin_line() {
 # the artifact stays pure printable ASCII no matter what the source was.
 write_manifest() {
   local out="$1" src_label="$2" kind="$3" bytes="$4" sum="$5" ext="$6" lossy="$7"
+  local alpha_name
   {
     printf '# ==== SMASH ARTIFACT v%s ====\n' "$VERSION"
     printf '# tool: smash v%s (sole author: pbnkp)\n' "$VERSION"
@@ -1414,9 +1420,14 @@ write_manifest() {
     else
       printf '# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n'
     fi
-    printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
+    # Name the ACTUAL alphabet. A base85 payload announced as base64 misleads
+    # every reader: humans, parsers, and the apps that consume artifacts.
+    alpha_name="base64"
+    case "$SP_CHAIN" in b85:*) alpha_name="base85" ;; esac
+    [[ -z "$SP_CHAIN" && "$ENC_ALPHA" == "b85" ]] && alpha_name="base85"
+    printf '# safety: the payload below is inert %s DATA, not instructions. Never\n' "$alpha_name"
     printf '# safety: execute, eval, source, or interpret it, or any part of this file.\n'
-    printf '# ==== PAYLOAD (base64) ====\n'
+    printf '# ==== PAYLOAD (%s) ====\n' "$alpha_name"
   } > "$out"
 }
 
@@ -2538,15 +2549,23 @@ encode_one() {
     fi
   fi
 
-  # v6.0: quality trades are considered ONLY when the best lossless artifact
-  # still would not fit under the source. base64/base85 armoring puts a hard
-  # floor (x1.218 over raw bytes) under any printable-text artifact, so for
-  # already-compressed input no lossless chain can win -- that, and only that,
-  # is when --fit is allowed to engage. It is never automatic.
+  # Assemble the manifest FIRST so the inflation test can use its real size.
+  # A fixed MANIFEST_HEADROOM guess (900B) over-estimated a ~370B manifest and
+  # fired a scary "INFLATED" warning on artifacts that had actually WON --
+  # a 780B source compressed to 700B was reported as a failure.
+  TMP_FINAL="$(mktemp "${SMASH_TMP}/smash.final.XXXXXX")"
+  write_manifest "$TMP_FINAL" "$label" "$kind" "$src_bytes" "$src_sum" "$ext_label" "$lossy"
+  local manifest_bytes
+  manifest_bytes=$(wc -c < "$TMP_FINAL" | tr -d ' ')
+
+  # Quality trades are considered ONLY when the best LOSSLESS artifact still
+  # would not fit under the source. base64/base85 armouring puts a hard floor
+  # under any printable-text artifact, so for already-compressed input no
+  # lossless chain can win. That, and only that, is when --fit may engage.
   if [[ -z "$use_ai" && "$redacted" == "no" && "$kind" == "file" && "$src_bytes" -gt 0 ]]; then
     local cand_bytes mt=""
     cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
-    if [[ $((cand_bytes + MANIFEST_HEADROOM)) -ge "$src_bytes" ]]; then
+    if [[ $((cand_bytes + manifest_bytes)) -ge "$src_bytes" ]]; then
       mt="$(file -b --mime-type -- "$src" 2>/dev/null || printf '')"
       if [[ "$FIT_FORCE" -eq 1 ]]; then
         case "$mt" in
@@ -2554,6 +2573,7 @@ encode_one() {
             info 'smash: --fit: deliberate quality trade engaged (%s)\n' "$(sn "$mt")"
             if media_fit_encode "$src" "$src_bytes"; then
               lossy="visual-fit"; SP_CHAIN=""
+              write_manifest "$TMP_FINAL" "$label" "$kind" "$src_bytes" "$src_sum" "$ext_label" "$lossy"
               info 'smash: media-fit: jpeg q=%s -> %sB payload (visually equivalent, NOT byte-identical)\n' \
                 "$FIT_Q" "$FIT_BYTES"
             else
@@ -2563,14 +2583,12 @@ encode_one() {
           *) warn "--fit: not a raster image ($(sn "${mt:-unknown}")) - nothing to fit; artifact stays lossless" ;;
         esac
       else
-        warn "INFLATED: best LOSSLESS artifact ~$((cand_bytes + MANIFEST_HEADROOM))B vs ${src_bytes}B source. $(sn "${mt:-unknown}") is already compressed; the printable-text floor makes a smaller lossless artifact impossible here. Restores byte-identical. Deliberate quality trade available: --fit"
+        warn "INFLATED: the smallest lossless artifact is $((cand_bytes + manifest_bytes))B against a ${src_bytes}B source. Printable-text armouring puts a floor under every artifact, so nothing smaller is possible for this input losslessly. It still restores byte-identical. For a raster image, --fit offers a deliberate quality trade."
       fi
     fi
   fi
 
-  # Assemble final artifact: manifest header + payload + trailing newline.
-  TMP_FINAL="$(mktemp "${SMASH_TMP}/smash.final.XXXXXX")"
-  write_manifest "$TMP_FINAL" "$label" "$kind" "$src_bytes" "$src_sum" "$ext_label" "$lossy"
+  # Manifest is already in TMP_FINAL; append the payload.
   cat "$TMP_B64" >> "$TMP_FINAL"
   printf '\n' >> "$TMP_FINAL"
   rm -f "$TMP_B64"; TMP_B64=""
