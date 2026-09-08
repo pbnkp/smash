@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smash v5.6 - Unified Encode/Decode Payload Manager
+# smash v5.3 - Unified Encode/Decode Payload Manager
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
-# Host: dual — FreeBSD 12.1 + macOS (darwin). bash 3.2-safe.
+# Host: dual — bernie (FreeBSD 12.1) + Mac (darwin). bash 3.2-safe.
 #
 # Compression modes:
 #   xz       (default)  — lossless, excellent ratio
@@ -10,20 +10,9 @@
 #   zstd     (-z)       — lossless, fast modern, opt-in
 #   ai       (--ai)     — native semantic compactor + xz, no API needed
 #   ai-api   (--ai-api) — LLM API compression + xz (lossy, ~5-10%)
-#
-# v5.6 LOSSLESS ENGINE for already-compressed sources (JPEG):
-#   jxl stage — lossless JPEG->JXL transcode (cjxl -e 9), typically -16..22%,
-#     BYTE-EXACT: reconstruction is proven with djxl + sha256 at encode time
-#     before the stage is ever adopted. Needs cjxl+djxl (brew install
-#     jpeg-xl) to encode and djxl to restore.
-#   b85 stage — Base85 payload alphabet (python3 stdlib) x1.25 overhead vs
-#     base64's x1.333. Rides with the jxl chain.
-#   The smallest LOSSLESS candidate always wins. If it is still >= the
-#   source, smash says INFLATED with the actual numbers — the printable-
-#   ASCII floor is x1.218, so a JPEG that recompresses less than ~22% can
-#   NEVER go under its own size as terminal-safe text. No silent quality
-#   loss, ever: --fit is the only path to a visually-equivalent re-encode
-#   (sips, declared as lossy: visual-fit + fit-sha256), and it is opt-in.
+#   tok      (--tok)    — v5.5 token-optimal LOSSLESS text artifact: payload
+#                         stays LLM-readable; repeated phrases fold to ~X
+#                         codes via a self-contained manifest dictionary
 #
 # v5.0 — the "many things in, one safe text file out" release:
 #   - MULTI-INPUT: smash f1 f2 dir/ f3 ... encodes each operand (no more
@@ -49,7 +38,7 @@
 #     works on encode (dir or filename prefix); unique-name suffix keeps
 #     the .txt ending; -V/--version added.
 #
-# v5.1 — the "never touch live" release (2026-07-13, born from a live
+# v5.1 — the "never touch live" release (2026-07-13, born from the bernie
 #   webroot incident):
 #   - WEBROOT/LIVE-MOUNT GUARD: artifacts are never written into web-served
 #     or live-mounted trees (public_html, ShellFish CloudStorage, htdocs,
@@ -79,7 +68,7 @@ export PATH
 # straight to an rclone remote with no local artifact and bounded memory;
 # source bytes+sha256 ride in a trailing manifest (decoders are position-
 # agnostic). Lossless only. Transfer retry/parts/rate delegated to rclone.
-VERSION="5.6"
+VERSION="6.0"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -125,19 +114,23 @@ OUT_PATH=""
 COMPRESS_MODE="xz"   # default: xz
 AI_MODE=0             # --ai enables native semantic compression
 AI_API_MODE=0         # --ai-api enables LLM API semantic compression
+TOK_MODE=0            # --tok: token-optimal LOSSLESS text artifact (v5.5)
+TOKDICT="${SMASH_TOKDICT:-$HOME/.local/share/smash/tokdict-v1.tsv}"  # shared phrase library (one phrase per line)
 OPERANDS=()           # all non-option arguments, in order
 USE_STDIN=0           # a lone `-` operand: stream stdin
 SINK=""               # --sink REMOTE:PATH : v5.3 stream artifacts to an rclone remote
 SINK_VERIFY=0         # --sink-verify : re-download + decode + compare after upload
 ORIGIN=""             # --origin "<text>" : caller-supplied provenance
 ORIGIN_AUTO=0         # --origin-auto : also record cwd + invoking process
-EXACT=0               # --exact : plain xz+base64 only (skips jxl stage; never lossy)
-FIT_FORCE=0           # --fit : EXPLICIT visually-equivalent re-encode (never automatic)
-FIT_Q=""              # media-fit result: winning JPEG quality
-FIT_BYTES=""          # media-fit result: fitted JPEG byte count
-FIT_SUM=""            # media-fit result: sha256 of fitted JPEG payload
-ENC_ALPHA="base64"    # payload alphabet for the manifest (base64 | b85)
-ENC_CHAIN=""          # extra lossless stage for the manifest ("" | jxl)
+
+# v5.5+age: opt-in payload encryption (age). Config: ~/.config/smash/encrypt
+# containing "on". Flags --encrypt/--no-encrypt override the config per run.
+ENCRYPT_FLAG=""       # "" = follow config file; "on"/"off" = flag override
+ENC_ACTIVE=0          # resolved encode-side switch (set by encrypt_resolve)
+AGE_BIN="${SMASH_AGE_BIN:-/opt/homebrew/bin/age}"
+AGE_KEYFILE="${SMASH_AGE_KEY:-$HOME/.secrets/smash-age.key}"
+AGE_RECIPIENT=""      # public recipient string (encode side)
+DEC_CIPHER=""         # decode-side cipher parsed from an artifact's manifest
 
 # Temp-path registry for cleanup traps (secrets-safe: everything staged in
 # $SMASH_TMP is removed on exit/interrupt).
@@ -153,14 +146,11 @@ TMP_OUT=""
 TMP_TXT=""
 TMP_STDIN=""
 TMP_EXTRACT=""
-TMP_FIT=""
-TMP_JXL=""
 
 cleanup_all() {
   rm -f "${TMP_B64:-}" "${TMP_AI:-}" "${TMP_TAR:-}" \
         "${TMP_AF:-}" "${TMP_PAYLOAD:-}" "${TMP_CURLCFG:-}" "${TMP_FINAL:-}" \
-        "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" "${TMP_FIT:-}" \
-        "${TMP_JXL:-}" "${TMP_JXL:+$TMP_JXL.jxl}" "${TMP_JXL:+$TMP_JXL.jpg}" 2>/dev/null
+        "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" 2>/dev/null
   [[ -z "${TMP_AIDIR:-}" ]] || rm -rf "$TMP_AIDIR"
   [[ -z "${TMP_EXTRACT:-}" ]] || rm -rf "$TMP_EXTRACT"
   return 0
@@ -169,7 +159,7 @@ trap cleanup_all EXIT INT HUP TERM
 
 usage() {
   cat 1>&2 <<'EOF'
-smash v5.6 — encode/decode payload manager
+smash v5.3 — encode/decode payload manager
 
 usage:
   smash <file> [file|dir ...]     encode each operand (xz, default)
@@ -182,18 +172,25 @@ usage:
   smash -z <inputs>               encode with zstd (fast modern, opt-in)
   smash --ai <inputs>             native semantic compress + xz (lossy)
   smash --ai-api <inputs>         LLM API compress + xz (lossy, ~5-10%)
+  smash --tok <inputs>            token-optimal LOSSLESS text artifact (v5.5):
+                                  payload stays LLM-readable; repeated phrases
+                                  fold to ~X codes; verify = round-trip sha
   smash --sink R:P <inputs>       stream artifacts to an rclone remote
                                   (no local artifact; lossless only)
   smash -d <artifact> [...]       decode artifacts (auto-detects format,
                                   extracts dirs, strips v5 manifest,
                                   reads pre-v5 headerless artifacts)
   smash -d -                      decode an artifact piped/pasted on stdin
+  smash --verify <artifact> ...   verify artifacts decode + sha256 matches
+                                  the manifest (no output; exit 1 on mismatch)
   smash -s "text"                 encode string
   smash --edit                    open editor, encode on save
   smash                           interactive paste mode (Ctrl+D ends)
 
 options:
   -d, --decode    Decode mode (reverses base64 + compression)
+      --verify    Verify artifacts decode + sha256 matches the manifest (files
+                  AND dirs; no extraction); exit 1 on mismatch. Alias: --check
   -g, --gz        Use gzip (or pigz if installed) instead of xz
   -z, --zstd      Use zstd instead of xz (needs zstd to encode/decode)
   -x, --xz        Use xz (default, explicit), multithreaded via -T0
@@ -203,14 +200,14 @@ options:
                   Anthropic. Needs an API key (or a local endpoint).
   --level N       Compression level override (xz/gz 1-9, zstd 1-19)
   --threads N     xz/zstd thread count (default 0 = all cores)
-  --exact         Skip the jxl lossless stage too: plain xz+base64 artifact
-                  (decodable anywhere, no djxl needed), even when bigger
-  --fit           DELIBERATE quality trade: re-encode a raster (sips,
-                  descending JPEG quality) until the artifact is smaller
-                  than the source. Visually equivalent, NOT byte-identical;
-                  declared as lossy: visual-fit. Never automatic.
+  --encrypt       Encrypt payload with age for this run (compressed stream is
+                  piped through age -r <recipient> before base64; manifest
+                  gains `cipher: age`). Key: ~/.secrets/smash-age.key
+  --no-encrypt    Force encryption OFF for this run (overrides the config)
+                  Global toggle: `echo on > ~/.config/smash/encrypt`.
+                  Decode auto-detects from the manifest cipher field.
   --sink R:PATH   Stream each artifact to an rclone remote destination
-                  (e.g. myremote:bucket/path/). Encode-only,
+                  (e.g. nkp@b2:oink-boy-vault/stream/). Encode-only,
                   lossless-only, no local artifact; source bytes+sha256
                   ride in a trailing manifest. smash -d restores as usual.
   --sink-verify   After upload: re-download, decode, compare bytes+sha256
@@ -261,7 +258,10 @@ safe_base() {
   s="${s##*/}"
   # Keep words readable instead of deleting spaces, avoid hidden/repeated-dot
   # outputs, and remove an old/new Smash suffix when re-smashing an artifact.
-  s="$(printf '%s' "$s" | LC_ALL=C sed -E \
+  # v5.4: strip control bytes (incl. the record-separator newline the
+  # line-oriented sed below cannot see) BEFORE the readable-name pass, so a
+  # filename with an embedded newline/tab can't survive into the artifact name.
+  s="$(printf '%s' "$s" | LC_ALL=C tr '\000-\037\177' '-' | LC_ALL=C sed -E \
     -e 's/[^A-Za-z0-9._-]+/-/g' \
     -e 's/[._-]{2,}/-/g' \
     -e 's/^[._-]+//' \
@@ -313,12 +313,12 @@ ensure_outdir() {
 }
 
 # ---------------------------------------------------------------------------
-# v5.1 SAFETY GUARDS (2026-07-13; born from a live webroot incident).
+# v5.1 SAFETY GUARDS (2026-07-13; born from the bernie webroot incident).
 # Artifacts must never land in a web-served or live-mounted tree, and smash
 # must never mutate its input. Guards fire on encode output, -o, and .dtar
 # auto-extraction. Deliberate override: SMASH_ALLOW_UNSAFE_OUTDIR=1.
 # ---------------------------------------------------------------------------
-SMASH_UNSAFE_RE='public_html|/Library/CloudStorage/ShellFish/|htdocs|wwwroot|/usr/local/www/|/var/www/'
+SMASH_UNSAFE_RE='public_html|/Library/CloudStorage/ShellFish/|htdocs|wwwroot|/usr/local/www/|/var/www/|(^|/)www(/|$)'
 SMASH_SAFE_FALLBACK="${HOME:-/tmp}/smashes"
 
 # real_dir: physical path of a dir (best effort; no readlink -f dependency).
@@ -350,36 +350,359 @@ sha256_file() {
   openssl dgst -sha256 < "$1" | awk '{print $NF}'
 }
 
-encode_to_tmp() {
-  local tmp_b64="$1"
-  case "$COMPRESS_MODE" in
-    xz)
-      local xzt="$XZ_T"
-      [[ -n "$THREADS" ]] && xzt="-T$THREADS"
-      xz "-${LEVEL:-9}" $xzt -c | openssl enc -base64 -A > "$tmp_b64"
+# ---------------------------------------------------------------------------
+# v5.5+age: opt-in encryption stage. When active, the COMPRESSED stream is
+# piped through `age -r <recipient>` BEFORE base64; the manifest records
+# `# cipher: age` so decode knows to run `age -d -i <key>` after base64-decode
+# and before decompression. Artifacts with no cipher line decode exactly as
+# before (backward compat is the contract).
+# ---------------------------------------------------------------------------
+encrypt_resolve() {
+  local want="$ENCRYPT_FLAG"
+  if [[ -z "$want" ]]; then
+    if [[ -r "$HOME/.config/smash/encrypt" ]] \
+       && grep -qx 'on' "$HOME/.config/smash/encrypt" 2>/dev/null; then
+      want="on"
+    fi
+  fi
+  if [[ "$want" != "on" ]]; then ENC_ACTIVE=0; return 0; fi
+  [[ -x "$AGE_BIN" ]] || die "encryption requested but age not found: $AGE_BIN"
+  [[ -r "$AGE_KEYFILE" ]] || die "encryption requested but key file missing: $AGE_KEYFILE (age-keygen -o $AGE_KEYFILE)"
+  AGE_RECIPIENT="$(sed -n 's/^# public key: \(age1[0-9a-z]*\).*/\1/p' "$AGE_KEYFILE" | head -n 1)"
+  if [[ -z "$AGE_RECIPIENT" ]] && command -v age-keygen >/dev/null 2>&1; then
+    AGE_RECIPIENT="$(age-keygen -y "$AGE_KEYFILE" 2>/dev/null | head -n 1)"
+  fi
+  [[ -n "$AGE_RECIPIENT" ]] || die "cannot derive age recipient from $AGE_KEYFILE"
+  ENC_ACTIVE=1
+  return 0
+}
+
+# maybe_encrypt: encode-side pipeline stage (identity when inactive).
+maybe_encrypt() {
+  if [[ "$ENC_ACTIVE" -eq 1 ]]; then "$AGE_BIN" -r "$AGE_RECIPIENT"; else cat; fi
+}
+
+# maybe_decrypt: decode-side pipeline stage keyed off $DEC_CIPHER (identity
+# when the artifact carries no cipher field — pre-encryption artifacts).
+maybe_decrypt() {
+  case "$DEC_CIPHER" in
+    "") cat ;;
+    age)
+      [[ -x "$AGE_BIN" ]] || { warn "artifact is age-encrypted but age not found: $AGE_BIN"; return 1; }
+      [[ -r "$AGE_KEYFILE" ]] || { warn "artifact is age-encrypted but key file missing: $AGE_KEYFILE"; return 1; }
+      "$AGE_BIN" -d -i "$AGE_KEYFILE"
       ;;
-    zstd)
-      zstd "-${LEVEL:-19}" "-T${THREADS:-0}" -q -c \
-        | openssl enc -base64 -A > "$tmp_b64"
-      ;;
-    *)  # gz (gzip or pigz)
-      "$GZ_BIN" "-${LEVEL:-9}" -c | openssl enc -base64 -A > "$tmp_b64"
-      ;;
+    *) warn "unknown cipher in manifest: $(sn "$DEC_CIPHER")"; return 1 ;;
   esac
 }
 
+# cipher_line: manifest field emitted only when encryption is active.
+cipher_line() {
+  if [[ "$ENC_ACTIVE" -eq 1 ]]; then
+    printf '# cipher: age | recipient: %s\n' "$(sn "$AGE_RECIPIENT")"
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------
-# v5.5 MEDIA-FIT. A byte-lossless printable-ASCII artifact of an
-# already-compressed source (JPEG/PNG/video/zip) is MATHEMATICALLY always
-# bigger than that source: base64 alone is x1.333 (printable-ASCII floor is
-# x1.218) and xz/gzip find no slack left in entropy-coded data. So when the
-# lossless payload cannot beat the source and the source is a JPEG, smash
-# re-encodes it with the native imaging stack (sips) at descending quality
-# until the WHOLE artifact (manifest + payload) is strictly smaller than the
-# source. Visually equivalent, NOT byte-identical — declared loudly in the
-# manifest (lossy: visual-fit) with fit-sha256 so restored bytes stay
-# integrity-checkable. --exact opts out; --fit widens to other rasters.
-# Hosts without sips (FreeBSD) warn INFLATED instead of fitting.
+# v5.5+dt: DATA-TYPE PREFILTER (xz only, artifact-transparent)
+#
+# Chooses an xz BCJ/delta prefilter from the source's magic bytes. The chosen
+# filter is recorded IN THE .xz BLOCK HEADER by the container itself, so
+# `xz -d` inverts it with no help from us. decode_to_tmp, verify_artifact,
+# write_manifest and the artifact format are therefore ALL UNTOUCHED: an
+# artifact built with a prefilter still decodes on older smash builds and on
+# bernie. Nothing about the artifact changes except how many bytes it is.
+#
+# FLEET FLOOR: bernie runs xz 5.2.4 (FreeBSD 12.1), which has x86 / arm /
+# armthumb / powerpc / sparc / delta but NOT arm64 and NOT riscv. Emitting a
+# filter bernie's liblzma cannot decode would create artifacts that are
+# undecodable in production, so arm64 sources deliberately get NO filter.
+# Do not add one without re-probing every host that decodes.
+#
+# Adopt-only-if-smaller: both variants are built and the smaller payload
+# wins, so a wrong guess costs encode time, never bytes. The filtered
+# candidate is also decoded and sha256-compared against the source before it
+# can be adopted -- a prefilter must be byte-exact or it is discarded.
+# SMASH_DT=0 disables the whole stage.
+# ---------------------------------------------------------------------------
+DT_PREFILTER="${SMASH_DT:-1}"
+
+# dt_magic <file> [nbytes] -> lowercase hex of the leading bytes, no separators
+dt_magic() {
+  od -An -v -tx1 -N "${2:-64}" -- "$1" 2>/dev/null | tr -d ' \n\t' || printf ''
+}
+
+# dt_u16le <hex> <byte-offset> -> decimal value of a little-endian uint16
+dt_u16le() {
+  local h="$1" o lo hi
+  o=$(( $2 * 2 ))
+  lo="${h:$o:2}"; hi="${h:$((o+2)):2}"
+  case "$lo$hi" in
+    *[!0-9a-f]*|"") printf '0'; return 0 ;;
+  esac
+  [[ ${#lo} -eq 2 && ${#hi} -eq 2 ]] || { printf '0'; return 0; }
+  printf '%d' $(( 16#$hi * 256 + 16#$lo ))
+}
+
+# dt_filter_for <file> -> an xz filter flag, "SKIP", or "" (no filter).
+#   SKIP = source is already a compressed container; a prefilter cannot help
+#          and the second encode pass would be pure wasted CPU.
+dt_filter_for() {
+  local f="$1" m mach bits ch dist
+  m="$(dt_magic "$f" 64)"
+  [[ -n "$m" ]] || { printf ''; return 0; }
+
+  case "$m" in
+    # --- already-compressed containers: never worth a second pass ----------
+    1f8b*|fd377a585a00*|28b52ffd*|504b0304*|504b0506*|ffd8ff*|89504e47*|\
+    25504446*|425a68*|377abcaf271c*|04224d18*|526172211a07*|1f9d*|4c5a4950*)
+      printf 'SKIP'; return 0 ;;
+    ????????66747970*)                      # ISO-BMFF: mp4/mov/heif/avif
+      printf 'SKIP'; return 0 ;;
+  esac
+
+  case "$m" in
+    # --- ELF: dispatch on e_machine (u16 LE at offset 0x12) ----------------
+    7f454c46*)
+      mach="$(dt_u16le "$m" 18)"
+      case "$mach" in
+        3|62)    printf -- '--x86' ;;       # EM_386 / EM_X86_64
+        40)      printf -- '--arm' ;;       # EM_ARM
+        20|21)   printf -- '--powerpc' ;;   # EM_PPC / EM_PPC64
+        2|43|18) printf -- '--sparc' ;;     # EM_SPARC / V9 / 32PLUS
+        *)       printf '' ;;               # 183 = AArch64: unsupported on bernie
+      esac
+      return 0 ;;
+
+    # --- Mach-O thin, little-endian host order: cputype u32 LE at offset 4 -
+    cffaedfe*|cefaedfe*)
+      case "${m:8:8}" in
+        07000001|07000000) printf -- '--x86' ;;   # 0x01000007 x86_64 / 0x7 i386
+        0c000000)          printf -- '--arm' ;;   # 0xc CPU_TYPE_ARM (32-bit)
+        *)                 printf '' ;;           # 0c000001 = ARM64: bernie's
+      esac                                        # xz 5.2.4 has no --arm64
+      return 0 ;;
+
+    # --- Mach-O universal ("fat"): several arches, BCJ can match only one --
+    cafebabe*|bebafeca*|cafebabf*|bfbafeca*) printf ''; return 0 ;;
+
+    # --- PE/COFF -----------------------------------------------------------
+    4d5a*) printf -- '--x86'; return 0 ;;
+
+    # --- RIFF/WAVE PCM: delta stride = channels * bytes-per-sample ---------
+    52494646*)
+      [[ "${m:16:8}" == "57415645" ]] || { printf ''; return 0; }
+      ch="$(dt_u16le "$m" 22)"
+      bits="$(dt_u16le "$m" 34)"
+      [[ "$ch" -ge 1 && "$ch" -le 8 ]] || { printf ''; return 0; }
+      case "$bits" in 8|16|24|32) : ;; *) printf ''; return 0 ;; esac
+      dist=$(( ch * bits / 8 ))
+      [[ "$dist" -ge 1 && "$dist" -le 256 ]] || { printf ''; return 0; }
+      printf -- '--delta=dist=%s' "$dist"
+      return 0 ;;
+
+    # --- BMP: uncompressed raster, stride = bytes per pixel ----------------
+    424d*)
+      bits="$(dt_u16le "$m" 28)"
+      case "$bits" in
+        24) printf -- '--delta=dist=3' ;;
+        32) printf -- '--delta=dist=4' ;;
+        *)  printf '' ;;
+      esac
+      return 0 ;;
+  esac
+
+  printf ''
+}
+
+# dt_variant <out-b64> <src> <filter-flag-or-empty>
+# Builds one complete payload candidate through the real shipping pipeline
+# (xz -> maybe_encrypt -> base64), so the sizes compared are the sizes that
+# actually land in the artifact.
+dt_variant() {
+  local out="$1" src="$2" filt="$3" xzt="$XZ_T"
+  [[ -n "$THREADS" ]] && xzt="-T$THREADS"
+  if [[ -n "$filt" ]]; then
+    xz $filt "--lzma2=preset=${LEVEL:-9}" $xzt -c < "$src" 2>/dev/null \
+      | maybe_encrypt | openssl enc -base64 -A > "$out" 2>/dev/null || return 1
+  else
+    xz "-${LEVEL:-9}" $xzt -c < "$src" \
+      | maybe_encrypt | openssl enc -base64 -A > "$out" || return 1
+  fi
+  [[ -s "$out" ]] || return 1
+  return 0
+}
+
+# dt_roundtrip_ok <b64-candidate> <src-sha256>
+# A prefilter is only allowed to ship if the candidate decodes back to bytes
+# that are sha256-identical to the source. Byte-exact or discarded.
+dt_roundtrip_ok() {
+  local cand="$1" want="$2" tmp got rc=0
+  tmp="$(mktemp "${SMASH_TMP}/smash.dtrt.XXXXXX")" || return 1
+  if openssl enc -d -base64 -A < "$cand" 2>/dev/null \
+     | maybe_decrypt | xz -d -c > "$tmp" 2>/dev/null; then
+    got="$(sha256_file "$tmp")"
+    [[ "$got" == "$want" ]] || rc=1
+  else
+    rc=1
+  fi
+  rm -f "$tmp"
+  return $rc
+}
+
+# dt_try <out-b64> <src>: returns 0 having written the winning payload.
+dt_try() {
+  local out="$1" src="$2" filt cand_f cand_p src_sum bf pf rc=1
+  filt="$(dt_filter_for "$src")"
+  [[ -n "$filt" && "$filt" != "SKIP" ]] || return 1
+
+  src_sum="$(sha256_file "$src")"
+  cand_f="$(mktemp "${SMASH_TMP}/smash.dtf.XXXXXX")" || return 1
+  cand_p="$(mktemp "${SMASH_TMP}/smash.dtp.XXXXXX")" || { rm -f "$cand_f"; return 1; }
+
+  if dt_variant "$cand_f" "$src" "$filt" \
+     && dt_roundtrip_ok "$cand_f" "$src_sum" \
+     && dt_variant "$cand_p" "$src" ""; then
+    bf=$(wc -c < "$cand_f" | tr -d ' ')
+    pf=$(wc -c < "$cand_p" | tr -d ' ')
+    if [[ "$bf" -lt "$pf" ]]; then
+      cat "$cand_f" > "$out"
+      info 'smash: dt: %s -> payload %sB (was %sB, -%s%%)\n' \
+        "$filt" "$bf" "$pf" "$(( (pf - bf) * 100 / pf ))"
+      rc=0
+    else
+      cat "$cand_p" > "$out"
+      rc=0
+    fi
+  fi
+
+  rm -f "$cand_f" "$cand_p"
+  return $rc
+}
+
+# Credential redactor (--redact)                                  [v5.7]
+#
+# Strips credential VALUES while preserving file STRUCTURE, so a redacted
+# config is still valid JSON/PHP/env and still shows which keys exist.
+#
+# Why this exists: bundles get forwarded. "The recipient is trusted" is true
+# on the day you send it and unknowable afterwards, so the safe default is to
+# never put a live credential in a transportable artifact at all.
+#
+# POSIX awk only (no \b, no gensub, no IGNORECASE dependency) so it behaves
+# identically on FreeBSD/bernie and macOS.
+#
+# Redacts: secret-ish key=value in JSON/PHP/YAML/env/ini forms, PHP define()
+# constants, credential-setting calls (->auth('x')), URL userinfo, JWTs, AWS
+# key ids, and whole PEM private-key blocks.
+# Deliberately does NOT redact: hosts, ports, usernames, paths, log levels,
+# booleans, or the words "password"/"secret" in prose.
+# --------------------------------------------------------------------------
+redact_file() {
+  local input_file="$1" output_file="$2" n
+  awk '
+  BEGIN {
+    nk = split("password passwd pwd passphrase secret token api_key apikey apitoken access_key accesskey private_key privatekey auth authorization credential credentials hmac salt client_secret bearer db_pass redis_pass jwt_secret api_secret sfu_auth_secret maintenance_token", K, " ")
+    inpem = 0; REDACTED = 0
+  }
+  function is_secret_key(k,   i) {
+    k = tolower(k); gsub(/[^a-z0-9_]/, "", k)
+    for (i = 1; i <= nk; i++) if (k == K[i]) return 1
+    for (i = 1; i <= nk; i++) if (index(k, K[i]) > 0) return 1
+    return 0
+  }
+  {
+    line = $0
+    if (line ~ /-----BEGIN [A-Z ]*PRIVATE KEY-----/) { inpem=1; print "[REDACTED:private-key-block]"; REDACTED++; next }
+    if (inpem) { if (line ~ /-----END [A-Z ]*PRIVATE KEY-----/) inpem=0; next }
+    if (line ~ /:\/\/[^:\/ ]+:[^@ ]+@/) { sub(/:\/\/[^:\/ ]+:[^@ ]+@/, "://[REDACTED:userinfo]@", line); REDACTED++ }
+    if (line ~ /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/) { gsub(/eyJ[A-Za-z0-9_.-]+/, "[REDACTED:jwt]", line); REDACTED++ }
+    if (line ~ /AKIA[0-9A-Z]{12,}/) { gsub(/AKIA[0-9A-Z]+/, "[REDACTED:aws-key]", line); REDACTED++ }
+    # v5.7: scan EVERY key/value pair on the line, not just the first.
+    # The original stopped at the first match(), so a benign leading key
+    # (db_host, Config{Host) shadowed every secret after it on the same line
+    # — which is how Go struct literals and one-line/minified config shipped
+    # live credentials. Same key list, same value guards, same quote handling;
+    # the ONLY change is that the scan continues to end of line.
+    kvout = ""; kvrem = line
+    while (match(kvrem, /[A-Za-z_][A-Za-z0-9_]*["\047]?[ \t]*(=>|::|[:=])[ \t]*/)) {
+      pre = substr(kvrem, 1, RSTART + RLENGTH - 1)
+      keypart = substr(kvrem, RSTART, RLENGTH)
+      post = substr(kvrem, RSTART + RLENGTH)
+      hit = 0
+      prevch = (RSTART > 1) ? substr(kvrem, RSTART - 1, 1) : (length(kvout) > 0 ? substr(kvout, length(kvout), 1) : "")
+      # R1: `secret == ""` is a comparison, not an assignment.
+      # R2: log.Printf("auth: %s") — the key is preceded by a quote but
+      #     NOT followed by one, unlike a real key ("db_pass": / 'db_pass' =>).
+      ctxok = 1
+      if (substr(post, 1, 1) == "=") ctxok = 0
+      if ((prevch == "\"" || prevch == "\047") && keypart !~ /["\047]/) ctxok = 0
+      if (ctxok && is_secret_key(keypart) && post != "") {
+        q = substr(post, 1, 1)
+        if (q == "\"" || q == "\047") {
+          rest = substr(post, 2); idx = index(rest, q)
+          if (idx > 1) {
+            val = substr(rest, 1, idx - 1)
+            if (val !~ /^[[:space:]]*$/ && val !~ /^\[REDACTED/) {
+              kvout = kvout pre q "[REDACTED]" q
+              kvrem = substr(rest, idx + 1)
+              REDACTED++; hit = 1
+            }
+          }
+        } else {
+          # Unquoted value ends at the first , ; } ) or end of line, so a
+          # later pair on the same line can never be swallowed whole.
+          vl = 0; pn = length(post)
+          for (vi = 1; vi <= pn; vi++) {
+            vc = substr(post, vi, 1)
+            if (vc == "," || vc == ";" || vc == "}" || vc == ")") break
+            vl++
+          }
+          val = substr(post, 1, vl); vtail = substr(post, vl + 1)
+          # R3: a call expression (errors.New(..), os.Getenv(..)) is code,
+          # not a literal credential. Other rules still see the line.
+          if (val !~ /^[[:space:]]*$/ && val !~ /^\[REDACTED/ && val !~ /^(null|true|false|[0-9]+)[[:space:]]*$/ && val !~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*\(/) {
+            kvout = kvout pre "[REDACTED]"
+            kvrem = vtail
+            REDACTED++; hit = 1
+          }
+        }
+      }
+      if (hit == 0) { kvout = kvout pre; kvrem = post }
+    }
+    line = kvout kvrem
+    if (line ~ /define[ \t]*\([ \t]*["\047][A-Za-z_][A-Za-z0-9_]*["\047]/) {
+      if (match(line, /define[ \t]*\([ \t]*["\047][A-Za-z_][A-Za-z0-9_]*["\047]/)) {
+        kt = substr(line, RSTART, RLENGTH)
+        if (is_secret_key(kt)) {
+          head = substr(line, 1, RSTART + RLENGTH - 1); tailp = substr(line, RSTART + RLENGTH)
+          if (match(tailp, /["\047][^"\047]*["\047]/)) {
+            q2 = substr(tailp, RSTART, 1)
+            line = head substr(tailp, 1, RSTART - 1) q2 "[REDACTED]" q2 substr(tailp, RSTART + RLENGTH); REDACTED++
+          }
+        }
+      }
+    }
+    if (line ~ /(auth|setPassword|setPasswd|setSecret|setToken|password)[ \t]*\([ \t]*["\047][^"\047]+["\047]/) {
+      if (match(line, /(auth|setPassword|setPasswd|setSecret|setToken|password)[ \t]*\([ \t]*/)) {
+        head = substr(line, 1, RSTART + RLENGTH - 1); tailp = substr(line, RSTART + RLENGTH)
+        q3 = substr(tailp, 1, 1)
+        if (q3 == "\"" || q3 == "\047") {
+          rest3 = substr(tailp, 2); i3 = index(rest3, q3)
+          if (i3 > 1) { v3 = substr(rest3, 1, i3 - 1)
+            if (v3 !~ /^\[REDACTED/) { line = head q3 "[REDACTED]" q3 substr(rest3, i3 + 1); REDACTED++ } }
+        }
+      }
+    }
+    print line
+  }
+  END { printf("%d", REDACTED) > "/dev/stderr" }
+  ' "$input_file" > "$output_file" 2>"${output_file}.n"
+  n="$(cat "${output_file}.n" 2>/dev/null || echo 0)"; rm -f "${output_file}.n"
+  REDACT_COUNT=$(( REDACT_COUNT + ${n:-0} ))
+}
+
 # ---------------------------------------------------------------------------
 MANIFEST_HEADROOM=900   # worst-case manifest bytes, counted against the budget
 
@@ -409,12 +732,106 @@ media_fit_encode() {
   return 1
 }
 
-# strip_manifest: reduce an artifact stream to bare payload text.
-# Drops `#` manifest lines (v5+) and all whitespace/newlines, which also
-# accepts pre-v5 single-line artifacts and line-wrapped/pasted payloads.
-strip_manifest() {
-  grep -v '^#' | LC_ALL=C tr -d ' \t\r\n'
-}
+# ---------------------------------------------------------------------------
+# v5.6+sp: SUPERPOSITION ENGINE
+#
+# No new compression algorithm exists here. Every primitive -- xz, brotli,
+# zstd, base64, base85, columnar transposition -- already ships on this
+# machine, and columnar transposition is just what Parquet and ORC have done
+# for years. The whole value is in the SELECTION layer:
+#
+#   superposition : build every viable chain at once, commit to none
+#   measurement   : decode each candidate and sha256 it against the source
+#   collapse      : ship the smallest candidate that SURVIVED verification
+#
+# The duality the artifact carries:
+#   (a) it is simultaneously a compressed payload and a pure-ASCII text file
+#       that stays safe to paste into an LLM or a chat window;
+#   (b) it is simultaneously encoder-chosen and decoder-derivable -- the exact
+#       chain is written into the manifest, so decode reconstructs the inverse
+#       from the artifact alone and never has to guess.
+#
+# Candidate space: {raw, tsv1} x {xz, brotli, zstd} x {base64, base85}.
+# tsv1 is column-major transposition of uniform delimited records; it is the
+# stage that turns a 58% win on logs and 86% on CSV, because like-typed
+# columns cluster and the entropy coder finally sees the structure.
+#
+# NO REGRESSION RULE: the legacy chain base64(xz(source)) is itself a
+# candidate. If it wins, sp_try returns 1 and the untouched original code
+# path produces the artifact, byte for byte. Nothing changes but the size.
+#
+# SCOPE: artifacts using a non-legacy chain need a decoder that understands
+# sp-v1 -- this build. That is a deliberate trade, taken because the fleet was
+# narrowed to this machine. SMASH_SP=0 disables the engine entirely.
+# ---------------------------------------------------------------------------
+# --- merged from the 5.7 line (v6.0) ---------------------------------------
+REDACT_MODE=0         # --redact : strip credential VALUES before encoding
+REDACT_COUNT=0        # running count of values redacted (set -u safe)
+FIT_FORCE=0           # --fit : EXPLICIT visually-equivalent re-encode, never automatic
+FIT_Q=""              # media-fit result: winning JPEG quality
+FIT_BYTES=""          # media-fit result: fitted JPEG byte count
+FIT_SUM=""            # media-fit result: sha256 of the fitted JPEG
+ENC_ALPHA="base64"    # legacy 5.6/5.7 payload alphabet, DECODE side (base64 | b85)
+ENC_CHAIN=""          # legacy 5.6/5.7 extra stage marker, DECODE side ("" | jxl)
+MANIFEST_HEADROOM=900 # worst-case manifest bytes, charged against the --fit budget
+EXACT=0               # --exact : skip the superposition (SMASH_SP=0 is the env alias)
+SP_ENGINE="${SMASH_SP:-1}"
+SP_CHAIN=""          # set by sp_try on a win; consumed by write_manifest
+SP_XZF=""            # dt-sniffed BCJ/delta prefilter for the xf candidate
+
+SP_PY='
+import sys, base64
+SEPS = [" ", ",", "\t", "|", ";", ":"]
+def tsv_enc(raw):
+    try: t = raw.decode("utf-8")
+    except UnicodeDecodeError: return None
+    if not t or "\x1f" in t: return None
+    nl = t.endswith("\n")
+    body = t[:-1] if nl else t
+    lines = body.split("\n")
+    if len(lines) < 8: return None
+    best = None
+    for i, sep in enumerate(SEPS):
+        nf = lines[0].count(sep) + 1
+        if nf < 3: continue
+        rows = [l.split(sep) for l in lines]
+        if any(len(r) != nf for r in rows): continue
+        cols = ["\x1f".join(c) for c in zip(*rows)]
+        # Shape guard goes in a TRAILER, never the header. brotli conditions
+        # its context model on the opening bytes: measured on a 1.7MB log,
+        # 8 extra HEADER bytes cost 9766 compressed bytes (+17%), while the
+        # same bytes as a trailer cost 2. Do not move this back to the front.
+        out = ("%s%d\n" % ("1" if nl else "0", i) + "\n".join(cols)
+               + "\n\x1e%d %d" % (nf, len(rows))).encode()
+        if best is None or len(out) < len(best): best = out
+    return best
+def tsv_dec(b):
+    d = b.decode("utf-8")
+    body, sep_t, trailer = d.rpartition("\n\x1e")
+    if not sep_t: raise ValueError("tsv1: missing shape trailer")
+    ncols, nrows = (int(x) for x in trailer.split(" "))
+    hdr, rest = body.split("\n", 1)
+    nl = hdr[0] == "1"; sep = SEPS[int(hdr[1:])]
+    cols = [c.split("\x1f") for c in rest.split("\n")]
+    # zip() truncates to the shortest column, so a payload clipped in transit
+    # would otherwise decode SHORT and succeed. Assert the recorded shape.
+    if len(cols) != ncols:
+        raise ValueError("tsv1: expected %d columns, got %d" % (ncols, len(cols)))
+    for c in cols:
+        if len(c) != nrows:
+            raise ValueError("tsv1: expected %d rows, got %d" % (nrows, len(c)))
+    out = "\n".join(sep.join(r) for r in zip(*cols))
+    return (out + "\n").encode() if nl else out.encode()
+m = sys.argv[1]; d = sys.stdin.buffer.read()
+if m == "te":
+    r = tsv_enc(d)
+    if r is None: sys.exit(3)
+    sys.stdout.buffer.write(r)
+elif m == "td":   sys.stdout.buffer.write(tsv_dec(d))
+elif m == "b85e": sys.stdout.buffer.write(base64.b85encode(d))
+elif m == "b85d": sys.stdout.buffer.write(base64.b85decode(d))
+'
+
 
 # decode_payload <alpha>: artifact text on stdin -> raw compressed bytes.
 # base64 streams through openssl; b85 (v5.6 engine chains) needs python3.
@@ -429,50 +846,232 @@ decode_payload() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# v5.6 LOSSLESS ENGINE — try_jxl_lossless <src> <cur_payload_bytes>
-# Candidate chain for JPEG sources: cjxl -e 9 (lossless JPEG bitstream
-# transcode, typically -16..22%) -> xz -> Base85 (x1.25 overhead vs base64's
-# x1.333; python3 stdlib, base64 fallback). PROOF BEFORE ADOPTION: the JXL is
-# reconstructed with djxl and sha256-compared against the source — any
-# mismatch discards the stage. Adopted only when the payload SHRINKS, even
-# if the artifact stays >= source (smallest honest artifact always wins).
-# ---------------------------------------------------------------------------
-try_jxl_lossless() {
-  local src="$1" cur="$2" cand alpha="base64" jxl_f jpg_f tmp_cand
-  command -v cjxl >/dev/null 2>&1 || return 1
-  command -v djxl >/dev/null 2>&1 || return 1
-  TMP_JXL="$(mktemp "${SMASH_TMP}/smash.jxl.XXXXXX")"
-  jxl_f="$TMP_JXL.jxl"; jpg_f="$TMP_JXL.jpg"
-  if ! cjxl -e 9 "$src" "$jxl_f" >/dev/null 2>&1; then
-    rm -f "$TMP_JXL" "$jxl_f"; TMP_JXL=""; return 1
+sp_codec_ok() {
+  case "$1" in
+    xz) command -v xz      >/dev/null 2>&1 ;;
+    xf) [[ -n "$SP_XZF" ]] && command -v xz >/dev/null 2>&1 ;;
+    br) command -v brotli  >/dev/null 2>&1 ;;
+    zs) command -v zstd    >/dev/null 2>&1 ;;
+    *)  return 1 ;;
+  esac
+}
+
+sp_compress() {
+  case "$1" in
+    xz) xz -9 -c ;;
+    xf) xz $SP_XZF "--lzma2=preset=9" -c ;;
+    br) brotli -q 11 --large_window=24 -c ;;
+    zs) zstd --ultra -22 --long=27 -q -c ;;
+    *)  return 1 ;;
+  esac
+}
+
+sp_decompress() {
+  case "$1" in
+    xz|xf) xz -d -c ;;
+    br) brotli -d -c ;;
+    zs) zstd -d -q -c ;;
+    *)  return 1 ;;
+  esac
+}
+
+sp_alpha_enc() {
+  case "$1" in
+    b64) openssl enc -base64 -A ;;
+    b85) python3 -c "$SP_PY" b85e ;;
+    *)   return 1 ;;
+  esac
+}
+
+sp_alpha_dec() {
+  case "$1" in
+    b64) openssl enc -d -base64 -A ;;
+    b85) python3 -c "$SP_PY" b85d ;;
+    *)   return 1 ;;
+  esac
+}
+
+# sp_invert <payload-file> <alpha> <codec> <transform> <out>
+# The decoder-derivable half of the duality: given only the chain names from
+# the manifest, rebuild the exact inverse. Used both to VERIFY a candidate at
+# encode time and to actually decode an artifact.
+sp_invert() {
+  local pay="$1" a="$2" c="$3" v="$4" out="$5" t1 t2
+  t1="$(mktemp "${SMASH_TMP}/smash.spi.XXXXXX")" || return 1
+  t2="$(mktemp "${SMASH_TMP}/smash.spj.XXXXXX")" || { rm -f "$t1"; return 1; }
+  if ! sp_alpha_dec "$a" < "$pay" 2>/dev/null | maybe_decrypt > "$t1" 2>/dev/null; then
+    rm -f "$t1" "$t2"; return 1
   fi
-  if ! djxl "$jxl_f" "$jpg_f" >/dev/null 2>&1 \
-     || [[ "$(sha256_file "$jpg_f")" != "$(sha256_file "$src")" ]]; then
-    warn "jxl stage: reconstruction not byte-exact — stage discarded"
-    rm -f "$TMP_JXL" "$jxl_f" "$jpg_f"; TMP_JXL=""; return 1
+  if ! sp_decompress "$c" < "$t1" > "$t2" 2>/dev/null; then
+    rm -f "$t1" "$t2"; return 1
   fi
-  rm -f "$jpg_f"
-  tmp_cand="$(mktemp "${SMASH_TMP}/smash.jxlcand.XXXXXX")"
-  if python3 -c 'import base64' >/dev/null 2>&1; then
-    xz -9 -c "$jxl_f" \
-      | python3 -c 'import sys,base64;sys.stdout.buffer.write(base64.b85encode(sys.stdin.buffer.read()))' \
-      > "$tmp_cand"
-    alpha="b85"
+  if [[ "$v" == "tsv1" ]]; then
+    if ! python3 -c "$SP_PY" td < "$t2" > "$out" 2>/dev/null; then
+      rm -f "$t1" "$t2"; return 1
+    fi
+  elif [[ "$v" == "jxl" ]]; then
+    command -v djxl >/dev/null 2>&1 || { rm -f "$t1" "$t2"; return 1; }
+    if ! djxl "$t2" "$t2.jpg" >/dev/null 2>&1; then
+      rm -f "$t1" "$t2" "$t2.jpg"; return 1
+    fi
+    cat "$t2.jpg" > "$out"; rm -f "$t2.jpg"
   else
-    xz -9 -c "$jxl_f" | openssl enc -base64 -A > "$tmp_cand"
+    cat "$t2" > "$out"
   fi
-  rm -f "$TMP_JXL" "$jxl_f"; TMP_JXL=""
-  cand=$(wc -c < "$tmp_cand" | tr -d ' ')
-  if [[ "$cand" -lt "$cur" ]]; then
-    mv -f "$tmp_cand" "$TMP_B64"
-    ENC_ALPHA="$alpha"; ENC_CHAIN="jxl"
-    info 'smash: engine: jxl lossless transcode (byte-exact, PROVEN by reconstruction) + %s: payload %sB -> %sB\n' \
-      "$alpha" "$cur" "$cand"
-    return 0
+  rm -f "$t1" "$t2"
+  return 0
+}
+
+# sp_try <out-payload> <src>: collapse the superposition. Returns 0 having
+# written the winning payload and set SP_CHAIN; returns 1 to mean "the legacy
+# chain won -- let the original code path produce a byte-identical artifact".
+sp_try() {
+  local out="$1" src="$2"
+  [[ "$SP_ENGINE" != "0" && "$EXACT" -eq 0 ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  # An explicit --level/--threads is the user pinning the codec; respect it.
+  [[ -z "$LEVEL" && -z "$THREADS" ]] || return 1
+
+  # Encode-time verification has to be able to UNDO maybe_encrypt, or every
+  # candidate fails its round-trip and the whole engine silently falls back to
+  # the legacy chain -- costing an encrypted artifact the entire sp gain.
+  # Dynamic scoping makes this local visible to maybe_decrypt inside
+  # sp_invert; the decode side sets DEC_CIPHER from the manifest instead.
+  local DEC_CIPHER=""
+  [[ "${ENC_ACTIVE:-0}" -eq 1 ]] && DEC_CIPHER="age"
+
+  local d src_sum
+  src_sum="$(sha256_file "$src")"
+  d="$(mktemp -d "${SMASH_TMP}/smash.sp.XXXXXX")" || return 1
+
+  SP_XZF="$(dt_filter_for "$src")"
+  [[ "$SP_XZF" == "SKIP" ]] && SP_XZF=""
+  cp "$src" "$d/raw" 2>/dev/null || { rm -rf "$d"; return 1; }
+  local variants="raw"
+  if python3 -c "$SP_PY" te < "$src" > "$d/tsv1" 2>/dev/null && [[ -s "$d/tsv1" ]]; then
+    variants="raw tsv1"
   fi
-  rm -f "$tmp_cand"
-  return 1
+  # v6.0: jxl is a TRANSFORM, not a parallel engine. 5.7 hardcoded it to
+  # xz + base85 and compared against a single incumbent; as a variant it gets
+  # brotli and zstd competition for free and is judged by the same collapse
+  # rule as everything else. dt_filter_for returns SKIP for JPEG, so this
+  # must be added independently of $SP_XZF or it would never be built.
+  if command -v cjxl >/dev/null 2>&1 && command -v djxl >/dev/null 2>&1; then
+    case "$(dt_magic "$src" 4)" in
+      ffd8ff*)
+        if cjxl -e 9 "$src" "$d/jxl" >/dev/null 2>&1 && [[ -s "$d/jxl" ]]; then
+          # PROOF BEFORE ADOPTION: reconstruct and sha256 against the source.
+          if djxl "$d/jxl" "$d/jxlrt.jpg" >/dev/null 2>&1 \
+             && [[ "$(sha256_file "$d/jxlrt.jpg")" == "$src_sum" ]]; then
+            variants="$variants jxl"
+          else
+            warn "jxl stage: reconstruction not byte-exact - variant discarded"
+          fi
+          rm -f "$d/jxlrt.jpg"
+        fi
+        ;;
+    esac
+  fi
+
+  local v c a n best_n="" best_chain="" tried=0
+  for v in $variants; do
+    for c in xz xf br zs; do
+      sp_codec_ok "$c" || continue
+      sp_compress "$c" < "$d/$v" 2>/dev/null | maybe_encrypt > "$d/c" 2>/dev/null || continue
+      [[ -s "$d/c" ]] || continue
+      for a in b64 b85; do
+        sp_alpha_enc "$a" < "$d/c" > "$d/p" 2>/dev/null || continue
+        [[ -s "$d/p" ]] || continue
+        n=$(wc -c < "$d/p" | tr -d ' ')
+        tried=$(( tried + 1 ))
+        [[ -n "$best_n" && "$n" -ge "$best_n" ]] && continue
+        # MEASUREMENT: a candidate is only eligible if it round-trips exactly.
+        if sp_invert "$d/p" "$a" "$c" "$v" "$d/rt" \
+           && [[ "$(sha256_file "$d/rt")" == "$src_sum" ]]; then
+          cp "$d/p" "$d/best"; best_n="$n"; best_chain="$a:$c:$v"
+        fi
+      done
+    done
+  done
+
+  if [[ -z "$best_chain" ]]; then rm -rf "$d"; return 1; fi
+  # The legacy chain winning means "no change" -- hand back to the old path so
+  # the artifact is byte-for-byte what smash produces today.
+  # Handing back means encode_to_tmp/dt_try will redo the filter search from
+  # scratch. That IS wasteful, and it is deliberate: it is the only way the
+  # legacy path produces its artifact byte-for-byte. Do not "optimise" it by
+  # shipping sp's copy -- the sp-v1 manifest marker would break old decoders
+  # for an artifact whose payload is identical to the legacy one.
+  case "$best_chain" in
+    b64:xz:raw|b64:xf:raw) rm -rf "$d"; return 1 ;;
+  esac
+
+  cat "$d/best" > "$out"
+  SP_CHAIN="$best_chain"
+  info 'smash: sp: %s candidates built, winner %s\n' "$tried" "$best_chain"
+  rm -rf "$d"
+  return 0
+}
+
+# sp_chain_label <a:c:v> -> the human/decoder-readable manifest chain
+sp_chain_label() {
+  local a c v IFS=':'
+  set -- $1
+  a="$1"; c="$2"; v="$3"
+  local an cn vn
+  case "$a" in b64) an="base64" ;; b85) an="base85" ;; *) an="$a" ;; esac
+  case "$c" in xz|xf) cn="xz" ;; br) cn="brotli" ;; zs) cn="zstd" ;; *) cn="$c" ;; esac
+  case "$v" in
+    tsv1) vn="tsv1( source )" ;;
+    jxl)  vn="jxl( source )" ;;
+    *)    vn="source" ;;
+  esac
+  printf 'sp-v1( %s( %s( %s ) ) )' "$an" "$cn" "$vn"
+}
+
+# sp_chain_parse <manifest-encoding-line> -> "a:c:v" for sp_invert
+sp_chain_parse() {
+  local e="$1" a="b64" c="xz" v="raw"
+  case "$e" in *base85\(*) a="b85" ;; esac
+  case "$e" in *brotli\(*) c="br" ;; *zstd\(*) c="zs" ;; esac
+  case "$e" in *tsv1\(*) v="tsv1" ;; *jxl\(*) v="jxl" ;; esac
+  printf '%s:%s:%s' "$a" "$c" "$v"
+}
+
+encode_to_tmp() {
+  local tmp_b64="$1" src_path="${2-}"
+
+  # v5.5+dt: xz only. The prefilter lives in the .xz block header, so no other
+  # stage -- manifest, decode, verify -- needs to know it happened. Any failure
+  # falls through to the untouched original path below.
+  if [[ "$DT_PREFILTER" != "0" && "$COMPRESS_MODE" == "xz" \
+        && -n "$src_path" && -f "$src_path" ]]; then
+    if dt_try "$tmp_b64" "$src_path"; then
+      return 0
+    fi
+  fi
+
+  case "$COMPRESS_MODE" in
+    xz)
+      local xzt="$XZ_T"
+      [[ -n "$THREADS" ]] && xzt="-T$THREADS"
+      xz "-${LEVEL:-9}" $xzt -c | maybe_encrypt | openssl enc -base64 -A > "$tmp_b64"
+      ;;
+    zstd)
+      zstd "-${LEVEL:-19}" "-T${THREADS:-0}" -q -c \
+        | maybe_encrypt | openssl enc -base64 -A > "$tmp_b64"
+      ;;
+    *)  # gz (gzip or pigz)
+      "$GZ_BIN" "-${LEVEL:-9}" -c | maybe_encrypt | openssl enc -base64 -A > "$tmp_b64"
+      ;;
+  esac
+}
+
+# strip_manifest: reduce an artifact stream to bare base64.
+# Drops `#` manifest lines (v5+) and all whitespace/newlines, which also
+# accepts pre-v5 single-line artifacts and line-wrapped/pasted payloads.
+strip_manifest() {
+  grep -v '^#' | LC_ALL=C tr -d ' \t\r\n'
 }
 
 # ---------------------------------------------------------------------------
@@ -489,6 +1088,10 @@ try_jxl_lossless() {
 # Lossless only: --ai rewrites staged copies in place and cannot stream.
 # ---------------------------------------------------------------------------
 sink_comp() {
+  # v5.5+dt: NO data-type prefilter here, deliberately. The sink path streams
+  # straight into rclone rcat and cannot rewind, so it can neither sniff the
+  # source nor build the two candidates the adopt-if-smaller rule compares.
+  # --sink artifacts stay exactly as they were.
   case "$COMPRESS_MODE" in
     xz)
       local xzt="$XZ_T"
@@ -524,8 +1127,12 @@ verify_sink() {
     zstd) decomp="zstd -d -q -c" ;;
     gz)   decomp="gunzip -c" ;;
   esac
+  # v5.5+age: when this run encrypted the stream, decrypt on re-download.
+  local DEC_CIPHER=""
+  [[ "$ENC_ACTIVE" -eq 1 ]] && DEC_CIPHER="age"
   rclone cat "$dest" 2>/dev/null | strip_manifest \
     | openssl enc -d -base64 -A \
+    | maybe_decrypt \
     | $decomp \
     | tee >(wc -c | tr -d ' ' > "$tmp_vc") \
     | openssl dgst -sha256 | awk '{print $NF}' > "$tmp_vs"
@@ -558,6 +1165,7 @@ encode_stream_to_sink() {
     printf '# source: %s | kind: %s | bytes: TRAILING | sha256: TRAILING\n' \
       "$(sn "$label")" "$(sn "$kind")"
     origin_line
+    cipher_line
     printf '# encoding: base64( %s( source ) ) | lossy: no | mode: sink-stream\n' "$(sn "$ext_label")"
     printf '# restore: smash -d <this-file> | integrity: bytes+sha256 in trailing manifest\n'
     printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
@@ -567,12 +1175,12 @@ encode_stream_to_sink() {
       tar cf - -C "$(dirname -- "$src")" -- "$(basename -- "$src")" \
         | tee >(openssl dgst -sha256 | awk '{print $NF}' > "$tmp_sum") \
               >(wc -c | tr -d ' ' > "$tmp_cnt") \
-        | sink_comp | openssl enc -base64
+        | sink_comp | maybe_encrypt | openssl enc -base64
       printf '%s\n' "${PIPESTATUS[*]}" > "$tmp_rc"
     else
       tee >(openssl dgst -sha256 | awk '{print $NF}' > "$tmp_sum") \
           >(wc -c | tr -d ' ' > "$tmp_cnt") < "$src" \
-        | sink_comp | openssl enc -base64
+        | sink_comp | maybe_encrypt | openssl enc -base64
       printf '%s\n' "${PIPESTATUS[*]}" > "$tmp_rc"
     fi
     # tee's process-substitution taps are asynchronous; bounded flush wait.
@@ -612,24 +1220,30 @@ encode_stream_to_sink() {
 }
 
 decode_to_tmp() {
-  local tmp_raw="$1" decomp="$2" alpha="${3:-base64}"
+  local tmp_raw="$1" decomp="$2"
   case "$decomp" in
-    zstd) decode_payload "$alpha" | zstd -d -q -c > "$tmp_raw" ;;
-    gz)   decode_payload "$alpha" | gunzip -c   > "$tmp_raw" ;;
-    *)    decode_payload "$alpha" | xz -d -c    > "$tmp_raw" ;;
+    zstd) strip_manifest | openssl enc -d -base64 -A | maybe_decrypt | zstd -d -q -c > "$tmp_raw" ;;
+    gz)   strip_manifest | openssl enc -d -base64 -A | maybe_decrypt | gunzip -c   > "$tmp_raw" ;;
+    *)    strip_manifest | openssl enc -d -base64 -A | maybe_decrypt | xz -d -c    > "$tmp_raw" ;;
   esac
 }
 
 # verify_artifact: prove the exact assembled artifact (manifest + payload)
 # decodes back to a valid compressed stream. This is the shipped-bytes check.
 verify_artifact() {
-  local artifact="$1" comp="$2" alpha="${3:-base64}"
+  local artifact="$1" comp="$2"
   [[ -s "$artifact" ]] || return 1
 
   local tmp_archive rc=0
   tmp_archive="$(mktemp "${SMASH_TMP}/smash.verify.XXXXXX")"
 
-  if ! decode_payload "$alpha" < "$artifact" > "$tmp_archive" 2>/dev/null; then
+  # v5.5+age: an encrypted artifact must be decrypted before the compressor
+  # integrity test — dynamic scoping makes this local visible to maybe_decrypt.
+  local DEC_CIPHER=""
+  grep -q '^# cipher: age' "$artifact" 2>/dev/null && DEC_CIPHER="age"
+
+  if ! strip_manifest < "$artifact" \
+       | openssl enc -d -base64 -A | maybe_decrypt > "$tmp_archive" 2>/dev/null; then
     rm -f "$tmp_archive"
     return 1
   fi
@@ -777,17 +1391,27 @@ write_manifest() {
     printf '# source: %s | kind: %s | bytes: %s | sha256: %s\n' \
       "$(sn "$src_label")" "$(sn "$kind")" "$(sn "$bytes")" "$(sn "$sum")"
     origin_line
+    cipher_line
     if [[ "$lossy" == "visual-fit" ]]; then
-      printf '# encoding: base64( %s( jpeg-fit(q=%s)( source ) ) ) | lossy: visual-fit\n' "$(sn "$ext")" "$(sn "$FIT_Q")"
-      printf '# fit: jpeg q=%s | fit-bytes: %s | fit-sha256: %s\n' "$(sn "$FIT_Q")" "$(sn "$FIT_BYTES")" "$FIT_SUM"
-      printf '# restore: smash -d <this-file> -> visually equivalent JPEG, NOT byte-identical\n'
-      printf '# restore: to source | integrity: compare fit-sha256 of restored bytes\n'
-    elif [[ "$ENC_CHAIN" == "jxl" ]]; then
-      printf '# encoding: %s( %s( jxl( source ) ) ) | lossy: no\n' "$(sn "${ENC_ALPHA:-base64}")" "$(sn "$ext")"
-      printf '# restore: smash -d <this-file> (jxl stage needs djxl — brew install jpeg-xl)\n'
-      printf '# restore: restores BYTE-IDENTICAL source | integrity: compare sha256 of restored bytes\n'
+      printf '# encoding: base64( %s( jpeg-fit(q=%s)( source ) ) ) | lossy: visual-fit\n' \
+        "$(sn "$ext")" "$(sn "$FIT_Q")"
+      printf '# fit: jpeg q=%s | fit-bytes: %s | fit-sha256: %s\n' \
+        "$(sn "$FIT_Q")" "$(sn "$FIT_BYTES")" "$(sn "$FIT_SUM")"
+    elif [[ -n "$SP_CHAIN" ]]; then
+      printf '# encoding: %s | lossy: %s\n' "$(sp_chain_label "$SP_CHAIN")" "$lossy"
     else
-      printf '# encoding: %s( %s( source ) ) | lossy: %s\n' "$(sn "${ENC_ALPHA:-base64}")" "$(sn "$ext")" "$lossy"
+      printf '# encoding: base64( %s( source ) ) | lossy: %s\n' "$(sn "$ext")" "$lossy"
+    fi
+    if [[ "$lossy" == "visual-fit" ]]; then
+      printf '# restore: smash -d <this-file> -> the FITTED jpeg, NOT byte-identical\n'
+      printf '# integrity: sha256 above identifies the ORIGINAL; fit-sha256 identifies\n'
+      printf '# integrity: what this artifact actually carries. A mismatch is CORRECT.\n'
+    elif [[ "$lossy" == "redacted" ]]; then
+      printf '# redacted: credential VALUES stripped before encoding; keys/structure kept\n'
+      printf '# restore: smash -d <this-file> -> REDACTED bytes, NOT byte-identical\n'
+      printf '# integrity: sha256 above identifies the ORIGINAL source, which this\n'
+      printf '# integrity: artifact deliberately does not carry. A mismatch is CORRECT.\n'
+    else
       printf '# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n'
     fi
     printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
@@ -1255,26 +1879,37 @@ ai_compress_api() {
   local is_anthropic=0
   local is_local=0
 
-  # --- Auto-detect provider from env vars ---
+  # --- Provider selection (v5.4: LOCAL-FIRST) ---
+  # Precedence: explicit B64_AI_URL  >  B64_AI_LOCAL=1 (force local)  >  a cloud
+  # key (opt-in)  >  local Ollama default. With nothing configured, `smash
+  # --ai-api` runs a LOCAL model — no key, no token cost, no provider rate limit
+  # or forced delay, and nothing leaves the machine.
   if [[ -z "$api_url" ]]; then
-    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    if [[ "${B64_AI_LOCAL:-0}" == "1" ]]; then
+      api_url="http://localhost:11434/v1/chat/completions"
+      is_local=1
+      model="${model:-llama3}"
+    elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
       api_url="https://api.anthropic.com/v1/messages"
       api_key="${api_key:-$ANTHROPIC_API_KEY}"
-      model="${model:-claude-sonnet-4-6}"
+      model="${model:-claude-haiku-4-5-20251001}"
       is_anthropic=1
     elif [[ -n "${OPENAI_API_KEY:-}" ]]; then
       api_url="https://api.openai.com/v1/chat/completions"
       api_key="${api_key:-$OPENAI_API_KEY}"
       model="${model:-gpt-4o-mini}"
     else
-      die "--ai-api needs: B64_AI_URL, or ANTHROPIC_API_KEY, or OPENAI_API_KEY"
+      api_url="http://localhost:11434/v1/chat/completions"
+      is_local=1
+      model="${model:-llama3}"
+      info 'smash: ai-api: no cloud provider set — using local Ollama (%s); set B64_AI_URL or a cloud key to change\n' "$api_url"
     fi
   else
     # URL provided — detect format
     if [[ "$api_url" == *"anthropic.com"* ]]; then
       is_anthropic=1
       api_key="${api_key:-${ANTHROPIC_API_KEY:-}}"
-      model="${model:-claude-sonnet-4-6}"
+      model="${model:-claude-haiku-4-5-20251001}"
     else
       api_key="${api_key:-${OPENAI_API_KEY:-}}"
       model="${model:-gpt-4o-mini}"
@@ -1396,19 +2031,309 @@ RULES:
     "$orig_bytes" "$comp_bytes" "$ratio"
 }
 
+# ==========================================================================
+# v5.5 — token-optimal lossless text mode (--tok)
+#
+# Problem it solves (measured 2026-07-27): base64 artifacts cost an LLM ~1.5
+# bytes/token vs ~4.2 for plain prose — a smashed doc pasted into a model
+# costs ~2.5x the tokens of the original. --tok inverts that: the payload
+# STAYS readable text, and repeated multi-word phrases fold into short ~X
+# codes declared in the manifest (self-contained; no external dictionary
+# needed to expand). Deterministic + reversible: escape pass (~ -> ~~),
+# longest-first literal substitution, expansion + unescape on decode.
+# LOSSLESS: manifest sha256 is the source sha and --verify proves the full
+# round trip (unlike --ai, which is lossy and uncheckable).
+#
+# Library ("librarial context"): $TOKDICT, one phrase per line, mined from
+# the operator's corpus. Library phrases are injected as substitution
+# candidates even at low in-document frequency; used entries are embedded
+# in the manifest so the artifact stays self-contained.
+#
+# Token math is heuristic inside smash (est = bytes/4; no tokenizer on
+# bernie). If SMASH_TOKCOUNT_CMD is set (reads text on stdin, prints an
+# integer token count), exact counts are reported instead of estimates.
+# ==========================================================================
+
+tok_est() {  # crude token estimate: bytes/4 (always labeled est- in output)
+  local b; b=$(wc -c < "$1" | tr -d ' '); printf '%s' "$(( (b + 3) / 4 ))"
+}
+
+tok_count() {  # exact count via SMASH_TOKCOUNT_CMD when provided, else estimate
+  if [[ -n "${SMASH_TOKCOUNT_CMD:-}" ]]; then
+    local n
+    n="$($SMASH_TOKCOUNT_CMD < "$1" 2>/dev/null | tr -dc '0-9')"
+    if [[ -n "$n" ]]; then printf '%s' "$n"; return 0; fi
+  fi
+  tok_est "$1"
+}
+
+# write_manifest_tok <out> <src_label> <kind> <bytes> <sha256> <finalnl> <entries>
+# Caller appends `# tokdict:` lines, the payload marker, then the payload.
+# Deliberately lean (6 lines): every manifest token is paste overhead for
+# this family, so provenance is packed dense. Never execute any part.
+write_manifest_tok() {
+  local out="$1" src_label="$2" kind="$3" bytes="$4" sum="$5" finalnl="$6" entries="$7"
+  {
+    printf '# ==== SMASH ARTIFACT v%s | tok-v1 | %s | host: %s ====\n' \
+      "$VERSION" "$(utc_ts)" "$(sn "$(hostname 2>/dev/null || printf 'unknown')")"
+    printf '# source: %s | kind: %s | bytes: %s | sha256: %s\n' \
+      "$(sn "$src_label")" "$(sn "$kind")" "$(sn "$bytes")" "$(sn "$sum")"
+    origin_line
+    printf '# encoding: tok-v1( source ) | lossy: no | finalnl: %s | entries: %s\n' "$finalnl" "$entries"
+    printf '# restore: smash -d <this-file> | verify: smash --verify | payload: inert tok-v1 TEXT data, never execute/eval/source it\n'
+    printf '# llm: payload below is readable; expand each ~X via the tokdict lines; ~~ = one literal ~\n'
+  } > "$out"
+}
+
+# tok_assemble <out> <payload> <dict> <entries> <label> <kind> <bytes> <sum> <finalnl>
+tok_assemble() {
+  local out="$1" pay="$2" dct="$3" entries="$4" label="$5" kind="$6" bytes="$7" sum="$8" finalnl="$9"
+  write_manifest_tok "$out" "$label" "$kind" "$bytes" "$sum" "$finalnl" "$entries"
+  if [[ "$entries" -gt 0 ]]; then
+    sed 's/^/# tokdict: /' "$dct" >> "$out"
+  fi
+  printf '# ==== PAYLOAD (tok-v1 text) ====\n' >> "$out"
+  cat "$pay" >> "$out"
+}
+
+# tok_transform <escaped_src> <payload_out> <dict_out>
+# Mines repeated word n-grams (2..6 words, plus $TOKDICT library hits),
+# keeps only net token winners, assigns ~X codes (a-z0-9A-Z, max 62),
+# substitutes longest-first, writes payload + `X=phrase` dict lines.
+tok_transform() {
+  local esrc="$1" pay="$2" dct="$3" lib=""
+  [[ -r "$TOKDICT" ]] && lib="$TOKDICT"
+  awk -v dictout="$dct" -v libfile="$lib" '
+    function esttok(s) { return int(length(s) / 4) + 1 }
+    BEGIN {
+      CH = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      nlib = 0
+      if (libfile != "") {
+        while ((getline L < libfile) > 0) {
+          if (length(L) >= 12 && index(L, "~") == 0) lib[++nlib] = L
+        }
+        close(libfile)
+      }
+    }
+    {
+      line[NR] = $0
+      n = split($0, w, / /)
+      for (i = 1; i <= n; i++) {
+        if (w[i] == "") continue
+        g = w[i]
+        # single long words are candidates too — paths, filenames, hostnames
+        # repeat where word n-grams alone would miss them entirely
+        if (length(g) >= 16 && length(g) <= 120) cnt[g]++
+        # PREFIX candidates: paths/identifiers repeat as prefixes long before
+        # they repeat as whole words (../../../plans/oink-, memory/feedback_).
+        # Walk separator boundaries and count each prefix ending at one.
+        if (length(g) >= 14) {
+          np = 0
+          for (q = 10; q < length(g) && np < 8; q++) {
+            ch = substr(g, q, 1)
+            if (ch == "/" || ch == "-" || ch == "_" || ch == ".") {
+              cnt[substr(g, 1, q)]++
+              np++
+            }
+          }
+        }
+        for (j = i + 1; j <= n && j <= i + 5; j++) {
+          if (w[j] == "") break
+          g = g " " w[j]
+          if (length(g) >= 16 && length(g) <= 120) cnt[g]++
+        }
+      }
+    }
+    END {
+      for (k = 1; k <= nlib; k++) {
+        p = lib[k]; c = 0
+        for (r = 1; r <= NR; r++) {
+          s = line[r]
+          while ((x = index(s, p)) > 0) { c++; s = substr(s, x + length(p)) }
+        }
+        if (c >= 2 && (!(p in cnt) || cnt[p] < c)) cnt[p] = c
+      }
+      # conservative accounting: a ~X code realizes ~3 tokens in practice
+      # (tilde splits merges), a dict line costs the phrase + ~6 tokens of
+      # framing. Only phrases that clear BOTH are worth an entry.
+      m = 0
+      for (p in cnt) {
+        c = cnt[p]; if (c < 2) continue
+        et = esttok(p)
+        net = c * (et - 3) - (et + 6)
+        if (net > 0) { m++; P[m] = p; NV[m] = net }
+      }
+      lim = (m < 62 ? m : 62)
+      for (a = 1; a <= lim; a++) {
+        best = a
+        for (b = a + 1; b <= m; b++) if (NV[b] > NV[best]) best = b
+        t = P[a]; P[a] = P[best]; P[best] = t
+        t = NV[a]; NV[a] = NV[best]; NV[best] = t
+      }
+      for (a = 1; a <= lim; a++)
+        for (b = a + 1; b <= lim; b++)
+          if (length(P[b]) > length(P[a])) {
+            t = P[a]; P[a] = P[b]; P[b] = t
+            t = NV[a]; NV[a] = NV[b]; NV[b] = t
+          }
+      for (a = 1; a <= lim; a++) print substr(CH, a, 1) "=" P[a] > dictout
+      for (r = 1; r <= NR; r++) {
+        s = line[r]
+        for (a = 1; a <= lim; a++) {
+          p = P[a]; np = ""
+          while ((x = index(s, p)) > 0) {
+            np = np substr(s, 1, x - 1) "~" substr(CH, a, 1)
+            s = substr(s, x + length(p))
+          }
+          s = np s
+        }
+        print s
+      }
+    }
+  ' "$esrc" > "$pay"
+  [[ -f "$dct" ]] || : > "$dct"
+}
+
+# tok_expand_artifact <artifact> <out> — dict + payload -> exact source bytes.
+tok_expand_artifact() {
+  local art="$1" out="$2"
+  local d p finalnl
+  d="$(mktemp "${SMASH_TMP}/smash.tokd.XXXXXX")"
+  p="$(mktemp "${SMASH_TMP}/smash.tokp.XXXXXX")"
+  sed -n 's/^# tokdict: //p' "$art" > "$d"
+  awk 'found { print } /^# ==== PAYLOAD \(tok-v1 text\) ====$/ { found = 1 }' "$art" > "$p"
+  awk -v dictfile="$d" '
+    BEGIN {
+      while ((getline L < dictfile) > 0) {
+        c = substr(L, 1, 1)
+        if (substr(L, 2, 1) == "=") MAP[c] = substr(L, 3)
+      }
+      close(dictfile)
+    }
+    {
+      s = $0; out = ""
+      while ((x = index(s, "~")) > 0) {
+        out = out substr(s, 1, x - 1)
+        nx = substr(s, x + 1, 1)
+        if (nx == "~") { out = out "~~"; s = substr(s, x + 2) }
+        else if (nx in MAP) { out = out MAP[nx]; s = substr(s, x + 2) }
+        else { out = out "~" nx; s = substr(s, x + 2) }
+      }
+      print out s
+    }
+  ' "$p" | sed 's/~~/~/g' > "$out"
+  finalnl="$(sed -n 's/^# encoding: tok-v1( source ) | lossy: no | finalnl: \([a-z]*\).*/\1/p' "$art" | head -n 1)"
+  if [[ "$finalnl" == "no" ]]; then
+    local b; b=$(wc -c < "$out" | tr -d ' ')
+    if [[ "$b" -gt 0 ]]; then
+      head -c $((b - 1)) "$out" > "${out}.t" && mv -f "${out}.t" "$out"
+    fi
+  fi
+  rm -f "$d" "$p"
+}
+
+# tok_encode_one <src> <label> <kind> <base> — the --tok encode path.
+# Fail-closed: the round trip is proven (expand + sha compare) BEFORE the
+# artifact is written anywhere.
+tok_encode_one() {
+  local src="$1" label="$2" kind="$3" base="$4"
+  local src_bytes src_sum finalnl="yes"
+  src_bytes=$(wc -c < "$src" | tr -d ' ')
+  src_sum="$(sha256_file "$src")"
+  if [[ "$src_bytes" -gt 0 ]]; then
+    [[ -z "$(tail -c 1 "$src")" ]] || finalnl="no"
+  fi
+
+  local esrc pay dct
+  esrc="$(mktemp "${SMASH_TMP}/smash.toke.XXXXXX")"
+  pay="$(mktemp "${SMASH_TMP}/smash.tokp.XXXXXX")"
+  dct="$(mktemp "${SMASH_TMP}/smash.tokd.XXXXXX")"
+  sed 's/~/~~/g' "$src" > "$esrc"
+  tok_transform "$esrc" "$pay" "$dct"
+
+  local entries
+  entries=$(wc -l < "$dct" | tr -d ' ')
+
+  # Assemble the substituted artifact (A); when substitutions exist, also
+  # assemble the zero-substitution variant (B) and MEASURE both — ship the
+  # cheaper one. The selection heuristic proposes; the count decides.
+  TMP_FINAL="$(mktemp "${SMASH_TMP}/smash.final.XXXXXX")"
+  tok_assemble "$TMP_FINAL" "$pay" "$dct" "$entries" "$label" "$kind" "$src_bytes" "$src_sum" "$finalnl"
+  if [[ "$entries" -gt 0 ]]; then
+    local tmp_b a_tok b_tok
+    tmp_b="$(mktemp "${SMASH_TMP}/smash.tokb.XXXXXX")"
+    tok_assemble "$tmp_b" "$esrc" "$dct" 0 "$label" "$kind" "$src_bytes" "$src_sum" "$finalnl"
+    a_tok="$(tok_count "$TMP_FINAL")"
+    b_tok="$(tok_count "$tmp_b")"
+    if [[ "$b_tok" -lt "$a_tok" ]]; then
+      info 'smash: tok: dictionary variant loses (%s vs %s) — shipping plain-text variant\n' "$a_tok" "$b_tok"
+      mv -f "$tmp_b" "$TMP_FINAL"
+      entries=0
+    else
+      rm -f "$tmp_b"
+    fi
+  fi
+  rm -f "$esrc" "$pay" "$dct"
+
+  local rt rt_sha
+  rt="$(mktemp "${SMASH_TMP}/smash.tokrt.XXXXXX")"
+  tok_expand_artifact "$TMP_FINAL" "$rt"
+  rt_sha="$(sha256_file "$rt")"
+  rm -f "$rt"
+  if [[ "$rt_sha" != "$src_sum" ]]; then
+    rm -f "$TMP_FINAL"; TMP_FINAL=""
+    die "tok round-trip verify FAILED — artifact NOT written (this is a smash bug, report it)"
+  fi
+
+  local final_out final_bytes src_tok art_tok paste_tok pt unit="est-tokens"
+  if [[ -n "$OUT_PREFIX" ]]; then
+    final_out="$(pick_outfile "$(dirname -- "$OUT_PREFIX")" "$OUT_PREFIX")"
+  else
+    final_out="$(pick_outfile "$OUTDIR" "$base")"
+  fi
+  final_bytes=$(wc -c < "$TMP_FINAL" | tr -d ' ')
+  src_tok="$(tok_count "$src")"
+  art_tok="$(tok_count "$TMP_FINAL")"
+  # paste cost = what an LLM actually needs: the tokdict lines + the payload
+  # (the provenance header can stay behind on disk).
+  pt="$(mktemp "${SMASH_TMP}/smash.tokpt.XXXXXX")"
+  { grep '^# tokdict: ' "$TMP_FINAL" 2>/dev/null || true
+    awk 'f { print } /^# ==== PAYLOAD \(tok-v1 text\) ====$/ { f = 1 }' "$TMP_FINAL"
+  } > "$pt"
+  paste_tok="$(tok_count "$pt")"
+  rm -f "$pt"
+  [[ -n "${SMASH_TOKCOUNT_CMD:-}" ]] && unit="tokens"
+  local pct_art=100 pct_paste=100
+  if [[ "$src_tok" -gt 0 ]]; then
+    pct_art=$(( art_tok * 100 / src_tok ))
+    pct_paste=$(( paste_tok * 100 / src_tok ))
+  fi
+  info 'smash: tok: %sB -> %sB | %s: source %s | artifact %s (%s%%) | paste dict+payload %s (%s%%) | entries %s | round-trip sha VERIFIED\n' \
+    "$src_bytes" "$final_bytes" "$unit" "$src_tok" \
+    "$art_tok" "$pct_art" "$paste_tok" "$pct_paste" "$entries"
+  move_final "$TMP_FINAL" "$final_out"
+  TMP_FINAL=""
+  info 'encoded: %s\n' "$(sn "$final_out")"
+}
+
 # ---- parse args ----
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage ;;
     -V|--version) printf 'smash v%s\n' "$VERSION"; exit 0 ;;
     -d|--decode) ACTION="decode"; shift ;;
+    --verify|--check) ACTION="verify"; shift ;;
     -x|--xz) COMPRESS_MODE="xz"; shift ;;
     -g|--gz) COMPRESS_MODE="gz"; shift ;;
     -z|--zstd|--zst)
       command -v zstd >/dev/null 2>&1 || die "--zstd requires zstd"
       COMPRESS_MODE="zstd"; shift ;;
     --ai) AI_MODE=1; COMPRESS_MODE="xz"; shift ;;
+    --redact) REDACT_MODE=1; shift ;;
+    --exact) EXACT=1; shift ;;
+    --fit) FIT_FORCE=1; shift ;;
     --ai-api) AI_API_MODE=1; COMPRESS_MODE="xz"; shift ;;
+    --tok) TOK_MODE=1; shift ;;
     -s) [[ $# -ge 2 ]] || usage; MODE="string"; TEXT="$2"; shift 2 ;;
     -o|--output) [[ $# -ge 2 ]] || usage; OUT_PATH="$2"; shift 2 ;;
     -q|--quiet) QUIET=1; shift ;;
@@ -1416,10 +2341,10 @@ while [[ $# -gt 0 ]]; do
     --threads) [[ $# -ge 2 ]] || usage; [[ "$2" =~ ^[0-9]+$ ]] || die "--threads needs an integer"; THREADS="$2"; shift 2 ;;
     --sink) [[ $# -ge 2 ]] || usage; SINK="$2"; shift 2 ;;
     --sink-verify) SINK_VERIFY=1; shift ;;
+    --encrypt) ENCRYPT_FLAG="on"; shift ;;
+    --no-encrypt) ENCRYPT_FLAG="off"; shift ;;
     --origin) [[ $# -ge 2 ]] || usage; ORIGIN="$2"; shift 2 ;;
     --origin-auto) ORIGIN_AUTO=1; shift ;;
-    --exact) EXACT=1; shift ;;
-    --fit) FIT_FORCE=1; shift ;;
     --edit) MODE="edit"; shift ;;
     --)
       # Everything after -- is an operand, verbatim (v5.0 fix: these were
@@ -1435,6 +2360,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# v5.5+age: resolve the opt-in encryption switch (encode side only — decode
+# is driven by each artifact's own manifest cipher field, never by config).
+if [[ "$ACTION" == "encode" ]]; then
+  encrypt_resolve
+  if [[ "$ENC_ACTIVE" -eq 1 && "$TOK_MODE" -eq 1 ]]; then
+    die "--tok artifacts are plaintext expansions and cannot be encrypted (drop --tok or pass --no-encrypt)"
+  fi
+fi
+
 # AI modes always wrap in xz (the .ai.xz contract) regardless of -g/-z order.
 if [[ "$AI_MODE" -eq 1 || "$AI_API_MODE" -eq 1 ]]; then
   COMPRESS_MODE="xz"
@@ -1448,9 +2382,15 @@ elif [[ "$AI_MODE" -eq 1 ]]; then
   ai_fn="ai_compress"
 fi
 
+# v5.5: --tok validation — text family, mutually exclusive with --ai/--sink.
+if [[ "$TOK_MODE" -eq 1 ]]; then
+  [[ -z "$ai_fn" ]] || die "--tok and --ai/--ai-api are mutually exclusive"
+  [[ -z "$SINK" ]] || die "--tok cannot stream to --sink"
+fi
+
 # v5.3: --sink validation — encode-only, lossless-only, path operands only.
 if [[ -n "$SINK" ]]; then
-  [[ "$ACTION" == "decode" ]] && die "--sink is encode-only"
+  [[ "$ACTION" != "encode" ]] && die "--sink is encode-only"
   [[ -n "$ai_fn" ]] && die "--sink is lossless-only (--ai cannot stream)"
   [[ -n "$OUT_PATH" ]] && die "--sink and -o are mutually exclusive"
   if [[ "$USE_STDIN" -eq 1 || "$MODE" == "string" || "$MODE" == "edit" ]]; then
@@ -1532,9 +2472,22 @@ encode_one() {
   local src="$1" label="$2" kind="$3" base="$4"
   local ext_label lossy="no" use_ai="$ai_fn"
 
+  # v5.5: --tok routes text inputs to the token-optimal lossless family.
+  # Non-text (including dir-tars) falls back to lossless xz, loudly.
+  if [[ "$TOK_MODE" -eq 1 ]]; then
+    if is_text_file "$src"; then
+      tok_encode_one "$src" "$label" "$kind" "$base"
+      return 0
+    fi
+    warn "note: $(sn "$label") is not text — using lossless xz (no --tok) for it"
+  fi
+
   # --ai on non-text content would mangle bytes through the awk compactor;
-  # fall back to lossless for that input (loud, once per input).
-  if [[ -n "$use_ai" && "$kind" == "file" ]] && ! is_text_file "$src"; then
+  # fall back to lossless for that input (loud, once per input). $src is always
+  # a staged regular file here (file / dir-tar / stdin / string / inline-args),
+  # so the text check must run for EVERY kind — the old "kind == file" gate let
+  # binary via stdin/-s/args reach the compactor and silently truncate (v5.4).
+  if [[ -n "$use_ai" ]] && ! is_text_file "$src"; then
     warn "note: $(sn "$label") is not text — using lossless xz (no --ai) for it"
     use_ai=""
   fi
@@ -1548,66 +2501,71 @@ encode_one() {
     ext_label="$COMPRESS_MODE"
   fi
 
-  local src_bytes src_sum
+  local src_bytes src_sum enc_src="$src" redacted="no"
   src_bytes=$(wc -c < "$src" | tr -d ' ')
   src_sum="$(sha256_file "$src")"
 
-  TMP_B64="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX.b64")"
+  # --redact strips credential VALUES before anything is compressed. The
+  # recorded bytes/sha256 stay the ORIGINAL file's, so provenance is still
+  # provable without the artifact ever carrying the secret. A redacted
+  # artifact is NOT byte-identical on restore, and says so in its manifest.
+  if [[ "$REDACT_MODE" -eq 1 ]]; then
+    if [[ "$kind" == "dir-tar" ]]; then
+      redacted="yes"          # members were redacted per-file before tarring
+    elif is_text_file "$src"; then
+      TMP_RED="$(mktemp "${SMASH_TMP}/smash.red.XXXXXX")"
+      redact_file "$src" "$TMP_RED"
+      enc_src="$TMP_RED"; redacted="yes"
+      info 'smash: redact: %s credential value(s) stripped from %s\n' \
+        "$REDACT_COUNT" "$(sn "$label")"
+    else
+      warn "note: $(sn "$label") is not text - --redact skipped for it; bytes pass through unchanged"
+    fi
+  fi
+  [[ "$redacted" == "yes" ]] && lossy="redacted"
+
+  TMP_B64="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX")"
 
   if [[ -n "$use_ai" ]]; then
     TMP_AI="$(mktemp "${SMASH_TMP}/smash.ai.XXXXXX")"
     "$use_ai" "$src" "$TMP_AI"
-    encode_to_tmp "$TMP_B64" < "$TMP_AI"
+    encode_to_tmp "$TMP_B64" "$TMP_AI" < "$TMP_AI"
     rm -f "$TMP_AI"; TMP_AI=""
   else
-    encode_to_tmp "$TMP_B64" < "$src"
-  fi
-
-  # v5.6: never silently lossy, never silently inflated.
-  #   1. When the lossless payload cannot beat the source and the source is
-  #      a JPEG, run the REAL engine: jxl lossless transcode (byte-exact,
-  #      proven by reconstruction) + b85. Adopted whenever it SHRINKS the
-  #      payload — smallest honest artifact always wins, even if still
-  #      >= source.
-  #   2. --fit (explicit only) may then trade quality for size.
-  #   3. Otherwise report INFLATED with the actual numbers.
-  FIT_Q=""; FIT_BYTES=""; FIT_SUM=""; ENC_ALPHA="base64"; ENC_CHAIN=""
-  if [[ -z "$use_ai" && "$kind" == "file" && "$src_bytes" -gt 0 ]]; then
-    local cand_bytes mt=""
-    cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
-    if [[ $((cand_bytes + MANIFEST_HEADROOM)) -ge "$src_bytes" ]]; then
-      mt="$(file -b --mime-type -- "$src" 2>/dev/null)"
-      if [[ "$mt" == "image/jpeg" && "$EXACT" -eq 0 ]]; then
-        if try_jxl_lossless "$src" "$cand_bytes"; then
-          cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
-        fi
-      fi
-      if [[ $((cand_bytes + MANIFEST_HEADROOM)) -ge "$src_bytes" ]]; then
-        if [[ "$FIT_FORCE" -eq 1 ]]; then
-          case "$mt" in
-            image/*)
-              info 'smash: --fit: deliberate quality trade engaged (%s)\n' "$(sn "$mt")"
-              if media_fit_encode "$src" "$src_bytes"; then
-                lossy="visual-fit"; ENC_ALPHA="base64"; ENC_CHAIN=""
-                info 'smash: media-fit: jpeg q=%s -> %sB payload (visually equivalent, NOT byte-identical)\n' "$FIT_Q" "$FIT_BYTES"
-              else
-                encode_to_tmp "$TMP_B64" < "$src"; ENC_ALPHA="base64"; ENC_CHAIN=""
-                warn "INFLATED: no JPEG quality fits under the source size — shipping byte-lossless artifact instead"
-              fi
-              ;;
-            *) warn "--fit: not a raster image ($(sn "${mt:-unknown}")) — nothing to fit; artifact stays lossless" ;;
-          esac
-        else
-          warn "INFLATED: best LOSSLESS artifact ~$((cand_bytes + 700))B vs ${src_bytes}B source ($(( (cand_bytes + 700) * 100 / src_bytes ))%). $(sn "${mt:-unknown}") is already compressed; the printable-text floor (x1.218 over raw bytes) makes a smaller lossless text artifact impossible for this input. Restores byte-identical. Deliberate quality trade available: --fit"
-        fi
-      fi
+    SP_CHAIN=""
+    if ! sp_try "$TMP_B64" "$enc_src"; then
+      encode_to_tmp "$TMP_B64" "$enc_src" < "$enc_src"
     fi
   fi
 
-  # The jxl chain always compresses with xz, whatever mode was flagged.
-  local ship_comp="$COMPRESS_MODE"
-  if [[ "$ENC_CHAIN" == "jxl" ]]; then
-    ext_label="xz"; ship_comp="xz"
+  # v6.0: quality trades are considered ONLY when the best lossless artifact
+  # still would not fit under the source. base64/base85 armoring puts a hard
+  # floor (x1.218 over raw bytes) under any printable-text artifact, so for
+  # already-compressed input no lossless chain can win -- that, and only that,
+  # is when --fit is allowed to engage. It is never automatic.
+  if [[ -z "$use_ai" && "$redacted" == "no" && "$kind" == "file" && "$src_bytes" -gt 0 ]]; then
+    local cand_bytes mt=""
+    cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
+    if [[ $((cand_bytes + MANIFEST_HEADROOM)) -ge "$src_bytes" ]]; then
+      mt="$(file -b --mime-type -- "$src" 2>/dev/null || printf '')"
+      if [[ "$FIT_FORCE" -eq 1 ]]; then
+        case "$mt" in
+          image/*)
+            info 'smash: --fit: deliberate quality trade engaged (%s)\n' "$(sn "$mt")"
+            if media_fit_encode "$src" "$src_bytes"; then
+              lossy="visual-fit"; SP_CHAIN=""
+              info 'smash: media-fit: jpeg q=%s -> %sB payload (visually equivalent, NOT byte-identical)\n' \
+                "$FIT_Q" "$FIT_BYTES"
+            else
+              warn "INFLATED: no JPEG quality fits under the source size - shipping the byte-lossless artifact instead"
+            fi
+            ;;
+          *) warn "--fit: not a raster image ($(sn "${mt:-unknown}")) - nothing to fit; artifact stays lossless" ;;
+        esac
+      else
+        warn "INFLATED: best LOSSLESS artifact ~$((cand_bytes + MANIFEST_HEADROOM))B vs ${src_bytes}B source. $(sn "${mt:-unknown}") is already compressed; the printable-text floor makes a smaller lossless artifact impossible here. Restores byte-identical. Deliberate quality trade available: --fit"
+      fi
+    fi
   fi
 
   # Assemble final artifact: manifest header + payload + trailing newline.
@@ -1618,7 +2576,28 @@ encode_one() {
   rm -f "$TMP_B64"; TMP_B64=""
 
   # Verify the exact bytes we are about to ship decode cleanly.
-  if ! verify_artifact "$TMP_FINAL" "$ship_comp" "$ENC_ALPHA"; then
+  if [[ "$redacted" == "yes" || "$lossy" == "visual-fit" ]]; then
+    # Restores to the REDACTED bytes by design, so the source sha256 must not
+    # be asserted. The payload is still proven readable before it ships.
+    if ! strip_manifest < "$TMP_FINAL" >/dev/null 2>&1; then
+      die "verify failed: artifact unreadable. staged file: $TMP_FINAL"
+    fi
+  elif [[ -n "$SP_CHAIN" ]]; then
+    # sp already proved this payload round-trips to the source sha256; re-prove
+    # it here against the ASSEMBLED artifact, which is the thing we ship.
+    # Derive the cipher from the ASSEMBLED artifact, not from encode state, so
+    # this check exercises exactly what a decoder will do with the shipped file.
+    local DEC_CIPHER=""
+    grep -q '^# cipher: age' "$TMP_FINAL" 2>/dev/null && DEC_CIPHER="age"
+    TMP_SPV="$(mktemp "${SMASH_TMP}/smash.spv.XXXXXX")"
+    if ! strip_manifest < "$TMP_FINAL" > "$TMP_SPV.p" 2>/dev/null \
+       || ! sp_invert "$TMP_SPV.p" ${SP_CHAIN//:/ } "$TMP_SPV" \
+       || [[ "$(sha256_file "$TMP_SPV")" != "$src_sum" ]]; then
+      rm -f "$TMP_SPV" "$TMP_SPV.p"
+      die "verify failed: sp artifact corrupt. staged file: $TMP_FINAL"
+    fi
+    rm -f "$TMP_SPV" "$TMP_SPV.p"
+  elif ! verify_artifact "$TMP_FINAL" "$COMPRESS_MODE"; then
     die "verify failed: artifact corrupt. staged file: $TMP_FINAL"
   fi
 
@@ -1634,10 +2613,6 @@ encode_one() {
     info 'smash: total: %sB -> %sB artifact (%s%%)\n' \
       "$src_bytes" "$final_bytes" "$((final_bytes * 100 / src_bytes))"
   fi
-  # media-fit promised strictly-smaller; a miss here is an accounting bug.
-  if [[ "$lossy" == "visual-fit" && "$final_bytes" -ge "$src_bytes" ]]; then
-    die "media-fit accounting error: artifact ${final_bytes}B >= source ${src_bytes}B — report this"
-  fi
 
   move_final "$TMP_FINAL" "$final_out"
   TMP_FINAL=""
@@ -1648,6 +2623,15 @@ encode_one() {
 encode_path() {
   local input="$1"
   input="${input%/}"
+  # v5.4: a symlink to a directory follows [[ -d ]] but `tar` would archive the
+  # LINK, not its contents — silent data loss (and an absolute target then makes
+  # the artifact unrestorable via the decode-side guard). Resolve to the real
+  # directory and archive that, loudly, so the contents are actually captured.
+  if [[ -L "$input" && -d "$input" ]]; then
+    local _real_input; _real_input="$(real_dir "$input")"
+    warn "note: $(sn "$input") is a symlink to a directory — archiving the target's contents ($(sn "$_real_input")), not the link"
+    input="$_real_input"
+  fi
   local base
   base="$(safe_base "$input")"
 
@@ -1686,7 +2670,7 @@ encode_path() {
     dir_parent="$(dirname -- "$input")"
     dir_base="$(basename -- "$input")"
     src_mode_before="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
-    TMP_TAR="$(mktemp "${SMASH_TMP}/smash.tar.XXXXXX.tar")"
+    TMP_TAR="$(mktemp "${SMASH_TMP}/smash.tar.XXXXXX")"
 
     if [[ -n "$ai_fn" ]]; then
       TMP_AIDIR="$(mktemp -d "${SMASH_TMP}/smash.aidir.XXXXXX")"
@@ -1716,6 +2700,20 @@ encode_path() {
     src_mode_after="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
     if [[ "$src_mode_before" != "$src_mode_after" ]]; then
       warn "WARNING: source dir mode changed during encode ($src_mode_before -> $src_mode_after) — THIS IS A smash BUG, report it"
+    fi
+
+    # v5.4: warn now if the tree carries a symlink whose target is absolute or
+    # uses `..`. The bytes ARE archived, but smash's own extraction guard will
+    # (correctly) refuse them on decode — without this note the encode looks
+    # clean yet the artifact can never be restored via `smash -d`.
+    if tar tvf "$TMP_TAR" 2>/dev/null | awk '
+        substr($1,1,1) == "l" {
+          t = $0; sub(/^.* -> /, "", t)
+          if (t ~ /^\// || t ~ /(^|\/)\.\.($|\/)/) bad = 1
+        }
+        END { exit bad ? 0 : 1 }
+      '; then
+      warn "note: this directory contains a symlink with an absolute or '..' target — the bytes are archived, but 'smash -d' will REFUSE to extract it (safety guard). Restore those paths another way."
     fi
 
     local tar_bytes
@@ -1749,6 +2747,11 @@ decode_one() {
   manifest_kind="$(sed -n 's/^# source: .* | kind: \([^|]*\) | bytes:.*/\1/p' "$infile" | head -n 1)"
   manifest_encoding="$(sed -n 's/^# encoding: \(.*\) | lossy:.*/\1/p' "$infile" | head -n 1)"
 
+  # v5.5+age: the manifest cipher field is authoritative for decryption.
+  # Artifacts without it (all pre-encryption artifacts) get DEC_CIPHER="" and
+  # decode exactly as before.
+  DEC_CIPHER="$(sed -n 's/^# cipher: \([a-z0-9-]*\).*/\1/p' "$infile" | head -n 1)"
+
   # Provenance is only useful if it reaches a human on the way back out.
   # Older artifacts have no origin line at all; absence is reported as such
   # rather than silently, so "written before origin existed" stays legible.
@@ -1761,10 +2764,17 @@ decode_one() {
   fi
 
   # Detect directory tar from the manifest, retaining old .dtar compatibility.
+  # v5.4: the manifest is authoritative. The .dtar filename heuristic is only a
+  # fallback for pre-v5 artifacts that carry NO kind — otherwise a regular file
+  # merely named "*.dtar" was force-extracted as a tar and died undecodable.
   local is_dtar=0
-  if [[ "$manifest_kind" == "dir-tar" || "$name" == *".dtar."* || "$name" == *".dtar" ]]; then
+  if [[ "$manifest_kind" == "dir-tar" || ( -z "$manifest_kind" && ( "$name" == *".dtar."* || "$name" == *".dtar" ) ) ]]; then
     is_dtar=1
   fi
+
+  # v5.5: tok-v1 artifacts expand (no base64/xz stage); manifest authoritative.
+  local is_tok=0
+  [[ "$manifest_encoding" == *"tok-v1("* ]] && is_tok=1
 
   # Auto-detect compression and AI mode from extension. Works with both the
   # v5 (.b64.<ts>.txt) and pre-v5 (.b64.<ts>) artifact names.
@@ -1787,23 +2797,6 @@ decode_one() {
     decomp="zstd"; ext_pattern="zst"
   fi
 
-  # v5.5 media-fit artifacts: payload is a fitted JPEG, not the source bytes.
-  local is_fit=0 fit_q=""
-  if [[ "$manifest_encoding" == *"-fit("* ]]; then
-    is_fit=1
-    fit_q="$(sed -n 's/^# fit: jpeg q=\([0-9]*\).*/\1/p' "$infile" | head -n 1)"
-  fi
-
-  # v5.6 engine chains: Base85 payload alphabet and/or a jxl lossless stage
-  # (byte-identical reconstruction via djxl).
-  local alpha="base64" is_jxl=0
-  case "$manifest_encoding" in b85\(*) alpha="b85" ;; esac
-  if [[ "$manifest_encoding" == *"jxl("* ]]; then
-    is_jxl=1
-    command -v djxl >/dev/null 2>&1 \
-      || die "this artifact has a jxl lossless stage — restoring needs djxl (brew install jpeg-xl)"
-  fi
-
   # Fail fast if the decoder for this payload isn't installed on this host.
   [[ "$decomp" != "zstd" ]] || command -v zstd >/dev/null 2>&1 || die "decoding .zst payloads requires zstd"
 
@@ -1824,12 +2817,6 @@ decode_one() {
     fi
     [[ -n "$bare" ]] || bare="restored"
 
-    # A fitted payload is always a JPEG and is NOT the source bytes — say so
-    # in the restored filename instead of impersonating the original.
-    if [[ "$is_fit" -eq 1 && "$is_dtar" -eq 0 ]]; then
-      bare="${bare%.*}.fit.jpg"
-    fi
-
     local target_dir="$dir"
     [[ -n "$DEC_OUT_DIR" ]] && target_dir="$DEC_OUT_DIR"
 
@@ -1847,17 +2834,51 @@ decode_one() {
 
   TMP_OUT="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX")"
 
-  decode_to_tmp "$TMP_OUT" "$decomp" "$alpha" < "$infile" || die "decompression or decode failed: $(sn "$infile")"
+  if [[ "$manifest_encoding" == *"sp-v1("* ]]; then
+    command -v python3 >/dev/null 2>&1 \
+      || die "this artifact uses an sp-v1 chain -- decoding needs python3"
+    local sp_spec sp_pay
+    sp_spec="$(sp_chain_parse "$manifest_encoding")"
+    case "$sp_spec" in
+      *:br:*) command -v brotli >/dev/null 2>&1 || die "sp-v1 chain needs brotli to decode" ;;
+      *:zs:*) command -v zstd   >/dev/null 2>&1 || die "sp-v1 chain needs zstd to decode" ;;
+    esac
+    sp_pay="$(mktemp "${SMASH_TMP}/smash.spd.XXXXXX")"
+    strip_manifest < "$infile" > "$sp_pay" 2>/dev/null \
+      || { rm -f "$sp_pay"; die "cannot read payload: $(sn "$infile")"; }
+    if ! sp_invert "$sp_pay" ${sp_spec//:/ } "$TMP_OUT"; then
+      rm -f "$sp_pay"; die "sp-v1 decode failed: $(sn "$infile")"
+    fi
+    rm -f "$sp_pay"
+  elif [[ "$manifest_encoding" == *"b85("* || "$manifest_encoding" == *"jxl("* ]]; then
+    # LEGACY 5.6/5.7 CHAIN. Artifacts from the bernie line read
+    #   # encoding: b85( xz( jxl( source ) ) )
+    # They carry no sp-v1 marker, so they must NOT reach sp_invert: their
+    # alphabet is handled by decode_payload and their jxl stage by djxl.
+    local lg_alpha="base64" lg_tmp
+    [[ "$manifest_encoding" == *"b85("* ]] && lg_alpha="b85"
+    lg_tmp="$(mktemp "${SMASH_TMP}/smash.lg.XXXXXX")"
+    if ! decode_payload "$lg_alpha" < "$infile" | maybe_decrypt | xz -d -c > "$lg_tmp" 2>/dev/null; then
+      rm -f "$lg_tmp"; die "legacy b85/jxl decode failed: $(sn "$infile")"
+    fi
+    if [[ "$manifest_encoding" == *"jxl("* ]]; then
+      command -v djxl >/dev/null 2>&1 \
+        || { rm -f "$lg_tmp"; die "this artifact has a jxl stage - restoring needs djxl (brew install jpeg-xl)"; }
+      if ! djxl "$lg_tmp" "$lg_tmp.jpg" >/dev/null 2>&1; then
+        rm -f "$lg_tmp" "$lg_tmp.jpg"; die "jxl reconstruction failed: $(sn "$infile")"
+      fi
+      cat "$lg_tmp.jpg" > "$TMP_OUT"; rm -f "$lg_tmp.jpg"
+    else
+      cat "$lg_tmp" > "$TMP_OUT"
+    fi
+    rm -f "$lg_tmp"
+  elif [[ "$is_tok" -eq 1 ]]; then
+    tok_expand_artifact "$infile" "$TMP_OUT" || die "tok expansion failed: $(sn "$infile")"
+  else
+    decode_to_tmp "$TMP_OUT" "$decomp" < "$infile" || die "decompression or decode failed: $(sn "$infile")"
+  fi
   if [[ ! -s "$TMP_OUT" ]]; then
     warn "note: $(sn "$name") restored as an empty file (source was empty)"
-  fi
-
-  # v5.6: reconstruct the byte-identical original JPEG from the jxl stage.
-  if [[ "$is_jxl" -eq 1 ]]; then
-    local jxl_jpg="${TMP_OUT}.jpg"
-    djxl "$TMP_OUT" "$jxl_jpg" >/dev/null 2>&1 \
-      || die "djxl reconstruction failed: $(sn "$infile")"
-    mv -f "$jxl_jpg" "$TMP_OUT"
   fi
 
   # v5.1: decoding a single file INTO a web-served/live dir stays allowed
@@ -1893,17 +2914,125 @@ decode_one() {
     else
       info 'decoded+extracted: %s/%s\n' "$(sn "$extract_dir")" "$(sn "$extracted_name")"
     fi
-  elif [[ "$is_fit" -eq 1 ]]; then
-    info 'decoded (media-fit jpeg q=%s — visually equivalent, NOT byte-identical to source): %s\n' \
-      "$(sn "${fit_q:-?}")" "$(sn "$out_path")"
-  elif [[ "$is_jxl" -eq 1 ]]; then
-    info 'decoded (jxl lossless stage reconstructed — byte-identical to source): %s\n' "$(sn "$out_path")"
   elif [[ "$is_ai" -eq 1 ]]; then
     info 'decoded (ai-compacted, lossy): %s\n' "$(sn "$out_path")"
   else
     info 'decoded: %s\n' "$(sn "$out_path")"
   fi
 }
+
+# ==========================================================================
+# verify_one: v5.4 integrity check. Decode the artifact to its DECOMPRESSED
+# payload (the tar for a dir, the file bytes for a file) WITHOUT extracting,
+# and compare its sha256 to the manifest. Correct for BOTH kinds because the
+# manifest sha256 is the sha of exactly those decompressed bytes. Prints a
+# stable machine-readable `SMASH-VERIFY ...` line on stdout (the MCP parses it)
+# plus a human line on stderr. A lossy (--ai) artifact carries the
+# pre-compaction source sha that decode cannot reproduce, so the compare is
+# skipped and reported as such rather than failed.
+# ==========================================================================
+verify_one() {
+  local infile="$1"
+  [[ -r "$infile" && -f "$infile" ]] || die "not a readable file: $(sn "$infile")"
+
+  local m_kind m_sha m_enc m_lossy
+  m_kind="$(sed -n 's/^# source: .* | kind: \([^|]*\) | bytes:.*/\1/p' "$infile" | head -n 1)"
+  m_kind="$(printf '%s' "$m_kind" | tr -d ' ')"
+  m_sha="$(sed -n 's/^# source: .* | sha256: \([0-9a-fA-F]\{64\}\).*$/\1/p' "$infile" | head -n 1)"
+  m_enc="$(sed -n 's/^# encoding: \(.*\) | lossy:.*/\1/p' "$infile" | head -n 1)"
+  m_lossy="$(sed -n 's/^# encoding: .* | lossy: \([A-Za-z]*\).*$/\1/p' "$infile" | head -n 1)"
+
+  # v5.5+age: honor the artifact's cipher field during verify decode.
+  local DEC_CIPHER
+  DEC_CIPHER="$(sed -n 's/^# cipher: \([a-z0-9-]*\).*/\1/p' "$infile" | head -n 1)"
+
+  # v5.5: tok-v1 — full lossless round-trip verify (expand + sha256 compare).
+  if [[ "$m_enc" == *"tok-v1("* ]]; then
+    local tok_sha tok_bytes
+    TMP_OUT="$(mktemp "${SMASH_TMP}/smash.vrfy.XXXXXX")"
+    if ! tok_expand_artifact "$infile" "$TMP_OUT" 2>/dev/null; then
+      rm -f "$TMP_OUT"; TMP_OUT=""
+      printf 'SMASH-VERIFY match=false kind=%s decoded_sha256= manifest_sha256=%s bytes=0 lossy=no reason=tok-expand-failed\n' \
+        "${m_kind:-unknown}" "${m_sha:-none}"
+      warn "verify: $(sn "$infile") — FAILED (tok artifact does not expand)"
+      return 1
+    fi
+    tok_bytes=$(wc -c < "$TMP_OUT" | tr -d ' ')
+    tok_sha="$(sha256_file "$TMP_OUT")"
+    rm -f "$TMP_OUT"; TMP_OUT=""
+    if [[ -n "$m_sha" && "$tok_sha" == "$m_sha" ]]; then
+      printf 'SMASH-VERIFY match=true kind=%s decoded_sha256=%s manifest_sha256=%s bytes=%s lossy=no\n' \
+        "${m_kind:-unknown}" "$tok_sha" "$m_sha" "$tok_bytes"
+      info 'smash: verify: %s — OK tok-v1 lossless round-trip (sha256 matches, %sB)\n' "$(sn "$infile")" "$tok_bytes"
+      return 0
+    fi
+    printf 'SMASH-VERIFY match=false kind=%s decoded_sha256=%s manifest_sha256=%s bytes=%s lossy=no\n' \
+      "${m_kind:-unknown}" "$tok_sha" "${m_sha:-none}" "$tok_bytes"
+    warn "verify: $(sn "$infile") — MISMATCH (tok expansion sha != manifest sha)"
+    return 1
+  fi
+
+  local decomp="xz"
+  if [[ "$m_enc" == *"zstd("* || "$m_enc" == *"zst("* ]]; then decomp="zstd"
+  elif [[ "$m_enc" == *"gzip("* || "$m_enc" == *"gz("* ]]; then decomp="gz"
+  fi
+  [[ "$decomp" != "zstd" ]] || command -v zstd >/dev/null 2>&1 || die "verifying .zst payloads requires zstd"
+
+  local got_sha got_bytes
+  TMP_OUT="$(mktemp "${SMASH_TMP}/smash.vrfy.XXXXXX")"
+  if ! decode_to_tmp "$TMP_OUT" "$decomp" < "$infile" 2>/dev/null; then
+    rm -f "$TMP_OUT"; TMP_OUT=""
+    printf 'SMASH-VERIFY match=false kind=%s decoded_sha256= manifest_sha256=%s bytes=0 lossy=%s reason=decode-failed\n' \
+      "${m_kind:-unknown}" "${m_sha:-none}" "${m_lossy:-no}"
+    warn "verify: $(sn "$infile") — FAILED (artifact does not decode)"
+    return 1
+  fi
+  got_bytes=$(wc -c < "$TMP_OUT" | tr -d ' ')
+  got_sha="$(sha256_file "$TMP_OUT")"
+  rm -f "$TMP_OUT"; TMP_OUT=""
+
+  if [[ "$m_lossy" == "yes" ]]; then
+    printf 'SMASH-VERIFY match=true kind=%s decoded_sha256=%s manifest_sha256=%s bytes=%s lossy=yes reason=lossy-no-source-compare\n' \
+      "${m_kind:-unknown}" "$got_sha" "${m_sha:-none}" "$got_bytes"
+    info 'smash: verify: %s — LOSSY artifact; decodes OK (%sB). Source sha is pre-compaction, not comparable.\n' "$(sn "$infile")" "$got_bytes"
+    return 0
+  fi
+  if [[ -z "$m_sha" ]]; then
+    printf 'SMASH-VERIFY match=unknown kind=%s decoded_sha256=%s manifest_sha256=none bytes=%s lossy=no reason=no-manifest-sha\n' \
+      "${m_kind:-unknown}" "$got_sha" "$got_bytes"
+    info 'smash: verify: %s — decodes OK (%sB) but the artifact carries no manifest sha256 (pre-v5); integrity uncheckable.\n' "$(sn "$infile")" "$got_bytes"
+    return 0
+  fi
+  if [[ "$got_sha" == "$m_sha" ]]; then
+    printf 'SMASH-VERIFY match=true kind=%s decoded_sha256=%s manifest_sha256=%s bytes=%s lossy=no\n' \
+      "${m_kind:-unknown}" "$got_sha" "$m_sha" "$got_bytes"
+    info 'smash: verify: %s — OK (sha256 matches manifest, %sB)\n' "$(sn "$infile")" "$got_bytes"
+    return 0
+  fi
+  printf 'SMASH-VERIFY match=false kind=%s decoded_sha256=%s manifest_sha256=%s bytes=%s lossy=no\n' \
+    "${m_kind:-unknown}" "$got_sha" "$m_sha" "$got_bytes"
+  warn "verify: $(sn "$infile") — MISMATCH (decoded sha256 != manifest sha256)"
+  return 1
+}
+
+if [[ "$ACTION" == "verify" ]]; then
+  # ==========================================
+  # VERIFY (v5.4)  — integrity check, no output files, no extraction
+  # ==========================================
+  if [[ "$USE_STDIN" -eq 1 ]]; then
+    TMP_STDIN="$(mktemp "${SMASH_TMP}/smash.in.XXXXXX")"
+    cat > "$TMP_STDIN"
+    OPERANDS+=("$TMP_STDIN")
+    N_OPS=${#OPERANDS[@]}
+  fi
+  [[ "$N_OPS" -gt 0 ]] || usage
+  vrc=0
+  for op in "${OPERANDS[@]}"; do
+    verify_one "$op" || vrc=1
+  done
+  [[ -z "${TMP_STDIN:-}" ]] || { rm -f "$TMP_STDIN"; TMP_STDIN=""; }
+  exit "$vrc"
+fi
 
 if [[ "$ACTION" == "decode" ]]; then
   # ==========================================
