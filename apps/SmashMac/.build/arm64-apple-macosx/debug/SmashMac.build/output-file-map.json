@@ -1,0 +1,19 @@
+{
+  "": {
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/primary.swiftdeps"
+  },
+  "/Users/piggy/smashrepo/apps/SmashMac/Sources/SmashMac/App.swift": {
+    "dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App.d",
+    "object": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App.dia"
+  },
+  "/Users/piggy/smashrepo/apps/SmashMac/Sources/SmashMac/Model.swift": {
+    "dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model.d",
+    "object": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model.dia"
+  }
+}

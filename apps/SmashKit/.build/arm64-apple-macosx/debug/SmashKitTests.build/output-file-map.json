@@ -1,0 +1,19 @@
+{
+  "": {
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/primary.swiftdeps"
+  },
+  "/Users/piggy/smashrepo/apps/SmashKit/Tests/SmashKitTests/SmashKitTests.swift": {
+    "dependencies": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/SmashKitTests.d",
+    "object": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/SmashKitTests.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/SmashKitTests~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/SmashKitTests.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/SmashKitTests.dia"
+  },
+  "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/DerivedSources/resource_bundle_accessor.swift": {
+    "dependencies": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/resource_bundle_accessor.d",
+    "object": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/resource_bundle_accessor.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/resource_bundle_accessor~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/resource_bundle_accessor.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/resource_bundle_accessor.dia"
+  }
+}

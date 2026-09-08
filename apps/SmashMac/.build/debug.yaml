@@ -1,0 +1,100 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "PackageStructure": ["<PackageStructure>"]
+  "SmashKit-arm64-apple-macosx-debug.module": ["<SmashKit-arm64-apple-macosx-debug.module>"]
+  "SmashMac-arm64-apple-macosx-debug.exe": ["<SmashMac-arm64-apple-macosx-debug.exe>"]
+  "SmashMac-arm64-apple-macosx-debug.module": ["<SmashMac-arm64-apple-macosx-debug.module>"]
+  "main": ["<SmashMac-arm64-apple-macosx-debug.exe>","<SmashMac-arm64-apple-macosx-debug.module>"]
+  "test": ["<SmashMac-arm64-apple-macosx-debug.exe>","<SmashMac-arm64-apple-macosx-debug.module>"]
+default: "main"
+nodes:
+  "/Users/piggy/smashrepo/apps/SmashMac/Sources/SmashMac/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac":
+    is-mutated: true
+commands:
+  "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/CLIRunner.swift","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Chain.swift","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Digest.swift","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Manifest.swift","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Payload.swift"]
+    outputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/sources"]
+    description: "Write auxiliary file /Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/sources"
+
+  "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac-entitlement.plist"]
+    description: "Write auxiliary file /Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac-entitlement.plist"
+
+  "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/piggy/smashrepo/apps/SmashMac/Sources/SmashMac/App.swift","/Users/piggy/smashrepo/apps/SmashMac/Sources/SmashMac/Model.swift"]
+    outputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/sources"]
+    description: "Write auxiliary file /Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/sources"
+
+  "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/CLIRunner.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Chain.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Digest.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Manifest.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Payload.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model.swift.o"]
+    outputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.product/Objects.LinkFileList"
+
+  "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<SmashKit-arm64-apple-macosx-debug.module>":
+    tool: phony
+    inputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/CLIRunner.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Chain.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Digest.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Manifest.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Payload.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashKit.swiftmodule"]
+    outputs: ["<SmashKit-arm64-apple-macosx-debug.module>"]
+
+  "<SmashMac-arm64-apple-macosx-debug.exe>":
+    tool: phony
+    inputs: ["<SmashMac-arm64-apple-macosx-debug.exe-CodeSigning>"]
+    outputs: ["<SmashMac-arm64-apple-macosx-debug.exe>"]
+
+  "<SmashMac-arm64-apple-macosx-debug.module>":
+    tool: phony
+    inputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashMac.swiftmodule"]
+    outputs: ["<SmashMac-arm64-apple-macosx-debug.module>"]
+
+  "C.SmashKit-arm64-apple-macosx-debug.module":
+    tool: shell
+    inputs: ["/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/CLIRunner.swift","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Chain.swift","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Digest.swift","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Manifest.swift","/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Payload.swift","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/sources"]
+    outputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/CLIRunner.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Chain.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Digest.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Manifest.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Payload.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashKit.swiftmodule"]
+    description: "Compiling Swift Module 'SmashKit' (5 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","SmashKit","-emit-dependencies","-emit-module","-emit-module-path","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashKit.swiftmodule","-output-file-map","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/sources","-I","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j12","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/include/SmashKit-Swift.h","-swift-version","6","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","smashkit"]
+
+  "C.SmashMac-arm64-apple-macosx-debug.exe":
+    tool: shell
+    inputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/CLIRunner.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Chain.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Digest.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Manifest.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashKit.build/Payload.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.product/Objects.LinkFileList"]
+    outputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/SmashMac"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-L","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug","-o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac","-module-name","SmashMac","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_SmashMac_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx14.0","-Xlinker","-add_ast_path","-Xlinker","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashKit.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashMac.swiftmodule","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g"]
+
+  "C.SmashMac-arm64-apple-macosx-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac-entitlement.plist"]
+    outputs: ["<SmashMac-arm64-apple-macosx-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/SmashMac"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac-entitlement.plist","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac"]
+
+  "C.SmashMac-arm64-apple-macosx-debug.module":
+    tool: shell
+    inputs: ["/Users/piggy/smashrepo/apps/SmashMac/Sources/SmashMac/App.swift","/Users/piggy/smashrepo/apps/SmashMac/Sources/SmashMac/Model.swift","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashKit.swiftmodule","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/sources"]
+    outputs: ["/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/App.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/Model.swift.o","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashMac.swiftmodule"]
+    description: "Compiling Swift Module 'SmashMac' (2 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","SmashMac","-emit-dependencies","-emit-module","-emit-module-path","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules/SmashMac.swiftmodule","-output-file-map","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/output-file-map.json","-incremental","-c","@/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/SmashMac.build/sources","-I","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j12","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","SmashMac_main","-swift-version","6","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","smashmac"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/piggy/smashrepo/apps/SmashMac/Sources/SmashMac/","/Users/piggy/smashrepo/apps/SmashMac/Package.swift","/Users/piggy/smashrepo/apps/SmashMac/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

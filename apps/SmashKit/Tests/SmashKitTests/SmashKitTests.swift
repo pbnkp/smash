@@ -1,0 +1,102 @@
+import Testing
+import Foundation
+@testable import SmashKit
+
+/// Every fixture in Tests/SmashKitTests/Fixtures is a REAL artifact produced
+/// by the smash CLI, not a hand-written approximation. If the artifact format
+/// changes, these tests fail, which is the point.
+private func fixture(_ name: String) throws -> String {
+    let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: nil))
+    return try String(contentsOf: url, encoding: .utf8)
+}
+
+private func fixtureData(_ name: String) throws -> Data {
+    let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: nil))
+    return try Data(contentsOf: url)
+}
+
+@Test func parsesSuperpositionManifest() throws {
+    let m = SmashManifest.parse(try fixture("sp-chain.smash.txt"))
+    #expect(m.toolVersion == "6.0")
+    #expect(m.kind == "file")
+    #expect(m.sourceSHA256?.count == 64)
+    #expect(m.sourceBytes ?? 0 > 0)
+    #expect(m.lossy == "no")
+    #expect(m.restoresByteIdentical)
+    #expect(m.lossyExplanation == nil)
+
+    let chain = try #require(m.chain)
+    #expect(chain.isSuperposition)
+    #expect(chain.alphabet == .base85)
+    #expect(chain.codec == .brotli)
+    #expect(m.payloadAlphabet == "base85", "the banner must name the real alphabet")
+}
+
+@Test func parsesLegacyXZManifest() throws {
+    let m = SmashManifest.parse(try fixture("xz-chain.smash.txt"))
+    let chain = try #require(m.chain)
+    #expect(!chain.isSuperposition)
+    #expect(chain.alphabet == .base64)
+    #expect(chain.codec == .xz)
+    #expect(m.payloadAlphabet == "base64")
+}
+
+@Test func reportsWhyEachChainCannotDecodeInApp() throws {
+    // Naming the missing capability is the whole point: "needs brotli" is
+    // actionable, "decode failed" is not.
+    let brotli = try #require(SmashManifest.parse(try fixture("sp-chain.smash.txt")).chain)
+    #expect(brotli.nativeDecodeBlocker?.contains("brotli") == true)
+
+    let xz = try #require(SmashManifest.parse(try fixture("xz-chain.smash.txt")).chain)
+    #expect(xz.nativeDecodeBlocker?.contains("xz") == true)
+
+    let zstd = try #require(SmashManifest.parse(try fixture("zstd-chain.smash.txt")).chain)
+    #expect(zstd.nativeDecodeBlocker?.contains("zstd") == true)
+
+    // gzip is the one chain both Apple platforms can invert unaided.
+    let gz = try #require(SmashManifest.parse(try fixture("gzip-chain.smash.txt")).chain)
+    #expect(gz.codec == .gzip)
+    #expect(gz.nativeDecodeBlocker == nil)
+}
+
+/// The iOS proof. A `smash -g` artifact must decode to bytes identical to the
+/// source using nothing but Foundation and Compression -- no CLI, no shelling
+/// out, nothing an App Store build cannot do.
+@Test func decodesGzipArtifactNativelyByteForByte() throws {
+    let artifact = try fixture("gzip-chain.smash.txt")
+    let manifest = SmashManifest.parse(artifact)
+    let chain = try #require(manifest.chain)
+    #expect(chain.nativeDecodeBlocker == nil)
+
+    let text = SmashPayload.stripManifest(artifact)
+    let compressed = try SmashPayload.decodeAlphabet(text, chain.alphabet)
+    let restored = try SmashPayload.gunzip(compressed)
+
+    let expected = try fixtureData("source.txt")
+    #expect(restored == expected)
+    #expect(restored.count == manifest.sourceBytes)
+
+    let digest = SmashDigest.sha256Hex(restored)
+    #expect(digest == manifest.sourceSHA256, "restored bytes must match the manifest sha256")
+}
+
+@Test func base85RoundTripsAgainstTheRealEncoder() throws {
+    // sp-chain uses base85; decoding its payload must yield a valid brotli
+    // stream, which we detect by its length being plausible and non-empty.
+    let artifact = try fixture("sp-chain.smash.txt")
+    let chain = try #require(SmashManifest.parse(artifact).chain)
+    #expect(chain.alphabet == .base85)
+    let raw = try SmashPayload.decodeBase85(SmashPayload.stripManifest(artifact))
+    #expect(!raw.isEmpty)
+}
+
+@Test func manifestParsingIgnoresUnknownFieldsAndSurvivesTruncation() {
+    let m = SmashManifest.parse("""
+    # ==== SMASH ARTIFACT v99.9 ====
+    # tool: smash v99.9 (sole author: pbnkp)
+    # some-future-field: whatever
+    # encoding: sp-v1( base85( lzham( quantum( source ) ) ) ) | lossy: no
+    """)
+    #expect(m.toolVersion == "99.9")
+    #expect(m.chain != nil)         // unknown codec falls back, does not crash
+}

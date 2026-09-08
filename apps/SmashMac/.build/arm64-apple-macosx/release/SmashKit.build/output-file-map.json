@@ -1,0 +1,37 @@
+{
+  "": {
+    "dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/SmashKit.d",
+    "object": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/SmashKit.o",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/primary.swiftdeps"
+  },
+  "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/CLIRunner.swift": {
+    "object": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/CLIRunner.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/CLIRunner~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/CLIRunner.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/CLIRunner.dia"
+  },
+  "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Chain.swift": {
+    "object": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Chain.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Chain~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Chain.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Chain.dia"
+  },
+  "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Digest.swift": {
+    "object": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Digest.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Digest~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Digest.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Digest.dia"
+  },
+  "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Manifest.swift": {
+    "object": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Manifest.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Manifest~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Manifest.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Manifest.dia"
+  },
+  "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Payload.swift": {
+    "object": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Payload.swift.o",
+    "swiftmodule": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Payload~partial.swiftmodule",
+    "swift-dependencies": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Payload.swiftdeps",
+    "diagnostics": "/Users/piggy/smashrepo/apps/SmashMac/.build/arm64-apple-macosx/release/SmashKit.build/Payload.dia"
+  }
+}

@@ -1,0 +1,27 @@
+name: SmashiOS
+options:
+  bundleIdPrefix: com.pbnkp.smash
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  SmashKit:
+    path: ../SmashKit
+targets:
+  SmashiOS:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: SmashKit
+        product: SmashKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pbnkp.smash.ios
+        MARKETING_VERSION: "6.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Smash
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_VERSION: "6.0"

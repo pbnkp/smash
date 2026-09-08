@@ -1,0 +1,714 @@
+{
+  "builtTestProducts" : [
+    {
+      "binaryPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.xctest/Contents/MacOS/SmashKitPackageTests",
+      "packagePath" : "/Users/piggy/smashrepo/apps/SmashKit",
+      "productName" : "SmashKitPackageTests"
+    }
+  ],
+  "copyCommands" : {
+    "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit_SmashKitTests.bundle/Fixtures" : {
+      "inputs" : [
+        {
+          "kind" : "directory",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Tests/SmashKitTests/Fixtures"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "directory",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit_SmashKitTests.bundle/Fixtures"
+        }
+      ]
+    }
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.SmashKit-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/sources",
+      "importPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/CLIRunner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Chain.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Digest.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Manifest.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Payload.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SmashKit",
+      "moduleOutputPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules/SmashKit.swiftmodule",
+      "objects" : [
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/CLIRunner.swift.o",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Chain.swift.o",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Digest.swift.o",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Manifest.swift.o",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Payload.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/include/SmashKit-Swift.h",
+        "-swift-version",
+        "6",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "smashkit"
+      ],
+      "outputFileMapPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/CLIRunner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Chain.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Digest.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Manifest.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Payload.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules/SmashKit.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/CLIRunner.swift",
+        "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Chain.swift",
+        "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Digest.swift",
+        "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Manifest.swift",
+        "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Payload.swift"
+      ],
+      "tempsPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SmashKitPackageTests-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/sources",
+      "importPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.derived/runner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules/SmashKitTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SmashKitPackageTests",
+      "moduleOutputPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules/SmashKitPackageTests.swiftmodule",
+      "objects" : [
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/runner.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/include/SmashKitPackageTests-Swift.h",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "smashkit"
+      ],
+      "outputFileMapPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules/SmashKitPackageTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.derived/runner.swift"
+      ],
+      "tempsPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.SmashKitTests-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/sources",
+      "importPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Tests/SmashKitTests/SmashKitTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/DerivedSources/resource_bundle_accessor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<SmashKitTests-arm64-apple-macosx-debug.module-resources>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules/SmashKit.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "SmashKitTests",
+      "moduleOutputPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules/SmashKitTests.swiftmodule",
+      "objects" : [
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/SmashKitTests.swift.o",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/resource_bundle_accessor.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+        "-module-cache-path",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-swift-version",
+        "6",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "smashkit"
+      ],
+      "outputFileMapPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/SmashKitTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules/SmashKitTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/piggy/smashrepo/apps/SmashKit/Tests/SmashKitTests/SmashKitTests.swift",
+        "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/DerivedSources/resource_bundle_accessor.swift"
+      ],
+      "tempsPath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "SmashKit" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "SmashKit",
+      "-package-name",
+      "smashkit",
+      "-c",
+      "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/CLIRunner.swift",
+      "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Chain.swift",
+      "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Digest.swift",
+      "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Manifest.swift",
+      "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Payload.swift",
+      "-I",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/include/SmashKit-Swift.h",
+      "-swift-version",
+      "6",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "smashkit",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "SmashKitPackageTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "SmashKitPackageTests",
+      "-package-name",
+      "smashkit",
+      "-c",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.derived/runner.swift",
+      "-I",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/include/SmashKitPackageTests-Swift.h",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "smashkit",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "SmashKitTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "SmashKitTests",
+      "-package-name",
+      "smashkit",
+      "-c",
+      "/Users/piggy/smashrepo/apps/SmashKit/Tests/SmashKitTests/SmashKitTests.swift",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/DerivedSources/resource_bundle_accessor.swift",
+      "-I",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+      "-module-cache-path",
+      "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-swift-version",
+      "6",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "smashkit",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "SmashKit" : [
+
+    ],
+    "SmashKitPackageTests" : [
+      "SmashKitTests",
+      "SmashKit"
+    ],
+    "SmashKitTests" : [
+      "SmashKit"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+    "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.derived/runner.swift" : {
+      "inputs" : [
+
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.derived/runner.swift"
+        }
+      ]
+    }
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/CLIRunner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Chain.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Digest.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Manifest.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Sources/SmashKit/Payload.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/sources"
+    },
+    "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.derived/runner.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/sources"
+    },
+    "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/CLIRunner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Chain.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Digest.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Manifest.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKit.build/Payload.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/SmashKitTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/resource_bundle_accessor.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitPackageTests.product/Objects.LinkFileList"
+    },
+    "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/Tests/SmashKitTests/SmashKitTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/DerivedSources/resource_bundle_accessor.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/SmashKitTests.build/sources"
+    },
+    "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/piggy/smashrepo/apps/SmashKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}
