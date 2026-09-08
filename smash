@@ -404,8 +404,196 @@ cipher_line() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# v5.5+dt: DATA-TYPE PREFILTER (xz only, artifact-transparent)
+#
+# Chooses an xz BCJ/delta prefilter from the source's magic bytes. The chosen
+# filter is recorded IN THE .xz BLOCK HEADER by the container itself, so
+# `xz -d` inverts it with no help from us. decode_to_tmp, verify_artifact,
+# write_manifest and the artifact format are therefore ALL UNTOUCHED: an
+# artifact built with a prefilter still decodes on older smash builds and on
+# bernie. Nothing about the artifact changes except how many bytes it is.
+#
+# FLEET FLOOR: bernie runs xz 5.2.4 (FreeBSD 12.1), which has x86 / arm /
+# armthumb / powerpc / sparc / delta but NOT arm64 and NOT riscv. Emitting a
+# filter bernie's liblzma cannot decode would create artifacts that are
+# undecodable in production, so arm64 sources deliberately get NO filter.
+# Do not add one without re-probing every host that decodes.
+#
+# Adopt-only-if-smaller: both variants are built and the smaller payload
+# wins, so a wrong guess costs encode time, never bytes. The filtered
+# candidate is also decoded and sha256-compared against the source before it
+# can be adopted -- a prefilter must be byte-exact or it is discarded.
+# SMASH_DT=0 disables the whole stage.
+# ---------------------------------------------------------------------------
+DT_PREFILTER="${SMASH_DT:-1}"
+
+# dt_magic <file> [nbytes] -> lowercase hex of the leading bytes, no separators
+dt_magic() {
+  od -An -v -tx1 -N "${2:-64}" -- "$1" 2>/dev/null | tr -d ' \n\t' || printf ''
+}
+
+# dt_u16le <hex> <byte-offset> -> decimal value of a little-endian uint16
+dt_u16le() {
+  local h="$1" o lo hi
+  o=$(( $2 * 2 ))
+  lo="${h:$o:2}"; hi="${h:$((o+2)):2}"
+  case "$lo$hi" in
+    *[!0-9a-f]*|"") printf '0'; return 0 ;;
+  esac
+  [[ ${#lo} -eq 2 && ${#hi} -eq 2 ]] || { printf '0'; return 0; }
+  printf '%d' $(( 16#$hi * 256 + 16#$lo ))
+}
+
+# dt_filter_for <file> -> an xz filter flag, "SKIP", or "" (no filter).
+#   SKIP = source is already a compressed container; a prefilter cannot help
+#          and the second encode pass would be pure wasted CPU.
+dt_filter_for() {
+  local f="$1" m mach bits ch dist
+  m="$(dt_magic "$f" 64)"
+  [[ -n "$m" ]] || { printf ''; return 0; }
+
+  case "$m" in
+    # --- already-compressed containers: never worth a second pass ----------
+    1f8b*|fd377a585a00*|28b52ffd*|504b0304*|504b0506*|ffd8ff*|89504e47*|\
+    25504446*|425a68*|377abcaf271c*|04224d18*|526172211a07*|1f9d*|4c5a4950*)
+      printf 'SKIP'; return 0 ;;
+    ????????66747970*)                      # ISO-BMFF: mp4/mov/heif/avif
+      printf 'SKIP'; return 0 ;;
+  esac
+
+  case "$m" in
+    # --- ELF: dispatch on e_machine (u16 LE at offset 0x12) ----------------
+    7f454c46*)
+      mach="$(dt_u16le "$m" 18)"
+      case "$mach" in
+        3|62)    printf -- '--x86' ;;       # EM_386 / EM_X86_64
+        40)      printf -- '--arm' ;;       # EM_ARM
+        20|21)   printf -- '--powerpc' ;;   # EM_PPC / EM_PPC64
+        2|43|18) printf -- '--sparc' ;;     # EM_SPARC / V9 / 32PLUS
+        *)       printf '' ;;               # 183 = AArch64: unsupported on bernie
+      esac
+      return 0 ;;
+
+    # --- Mach-O thin, little-endian host order: cputype u32 LE at offset 4 -
+    cffaedfe*|cefaedfe*)
+      case "${m:8:8}" in
+        07000001|07000000) printf -- '--x86' ;;   # 0x01000007 x86_64 / 0x7 i386
+        0c000000)          printf -- '--arm' ;;   # 0xc CPU_TYPE_ARM (32-bit)
+        *)                 printf '' ;;           # 0c000001 = ARM64: bernie's
+      esac                                        # xz 5.2.4 has no --arm64
+      return 0 ;;
+
+    # --- Mach-O universal ("fat"): several arches, BCJ can match only one --
+    cafebabe*|bebafeca*|cafebabf*|bfbafeca*) printf ''; return 0 ;;
+
+    # --- PE/COFF -----------------------------------------------------------
+    4d5a*) printf -- '--x86'; return 0 ;;
+
+    # --- RIFF/WAVE PCM: delta stride = channels * bytes-per-sample ---------
+    52494646*)
+      [[ "${m:16:8}" == "57415645" ]] || { printf ''; return 0; }
+      ch="$(dt_u16le "$m" 22)"
+      bits="$(dt_u16le "$m" 34)"
+      [[ "$ch" -ge 1 && "$ch" -le 8 ]] || { printf ''; return 0; }
+      case "$bits" in 8|16|24|32) : ;; *) printf ''; return 0 ;; esac
+      dist=$(( ch * bits / 8 ))
+      [[ "$dist" -ge 1 && "$dist" -le 256 ]] || { printf ''; return 0; }
+      printf -- '--delta=dist=%s' "$dist"
+      return 0 ;;
+
+    # --- BMP: uncompressed raster, stride = bytes per pixel ----------------
+    424d*)
+      bits="$(dt_u16le "$m" 28)"
+      case "$bits" in
+        24) printf -- '--delta=dist=3' ;;
+        32) printf -- '--delta=dist=4' ;;
+        *)  printf '' ;;
+      esac
+      return 0 ;;
+  esac
+
+  printf ''
+}
+
+# dt_variant <out-b64> <src> <filter-flag-or-empty>
+# Builds one complete payload candidate through the real shipping pipeline
+# (xz -> maybe_encrypt -> base64), so the sizes compared are the sizes that
+# actually land in the artifact.
+dt_variant() {
+  local out="$1" src="$2" filt="$3" xzt="$XZ_T"
+  [[ -n "$THREADS" ]] && xzt="-T$THREADS"
+  if [[ -n "$filt" ]]; then
+    xz $filt "--lzma2=preset=${LEVEL:-9}" $xzt -c < "$src" 2>/dev/null \
+      | maybe_encrypt | openssl enc -base64 -A > "$out" 2>/dev/null || return 1
+  else
+    xz "-${LEVEL:-9}" $xzt -c < "$src" \
+      | maybe_encrypt | openssl enc -base64 -A > "$out" || return 1
+  fi
+  [[ -s "$out" ]] || return 1
+  return 0
+}
+
+# dt_roundtrip_ok <b64-candidate> <src-sha256>
+# A prefilter is only allowed to ship if the candidate decodes back to bytes
+# that are sha256-identical to the source. Byte-exact or discarded.
+dt_roundtrip_ok() {
+  local cand="$1" want="$2" tmp got rc=0
+  tmp="$(mktemp "${SMASH_TMP}/smash.dtrt.XXXXXX")" || return 1
+  if openssl enc -d -base64 -A < "$cand" 2>/dev/null \
+     | maybe_decrypt | xz -d -c > "$tmp" 2>/dev/null; then
+    got="$(sha256_file "$tmp")"
+    [[ "$got" == "$want" ]] || rc=1
+  else
+    rc=1
+  fi
+  rm -f "$tmp"
+  return $rc
+}
+
+# dt_try <out-b64> <src>: returns 0 having written the winning payload.
+dt_try() {
+  local out="$1" src="$2" filt cand_f cand_p src_sum bf pf rc=1
+  filt="$(dt_filter_for "$src")"
+  [[ -n "$filt" && "$filt" != "SKIP" ]] || return 1
+
+  src_sum="$(sha256_file "$src")"
+  cand_f="$(mktemp "${SMASH_TMP}/smash.dtf.XXXXXX")" || return 1
+  cand_p="$(mktemp "${SMASH_TMP}/smash.dtp.XXXXXX")" || { rm -f "$cand_f"; return 1; }
+
+  if dt_variant "$cand_f" "$src" "$filt" \
+     && dt_roundtrip_ok "$cand_f" "$src_sum" \
+     && dt_variant "$cand_p" "$src" ""; then
+    bf=$(wc -c < "$cand_f" | tr -d ' ')
+    pf=$(wc -c < "$cand_p" | tr -d ' ')
+    if [[ "$bf" -lt "$pf" ]]; then
+      cat "$cand_f" > "$out"
+      info 'smash: dt: %s -> payload %sB (was %sB, -%s%%)\n' \
+        "$filt" "$bf" "$pf" "$(( (pf - bf) * 100 / pf ))"
+      rc=0
+    else
+      cat "$cand_p" > "$out"
+      rc=0
+    fi
+  fi
+
+  rm -f "$cand_f" "$cand_p"
+  return $rc
+}
+
 encode_to_tmp() {
-  local tmp_b64="$1"
+  local tmp_b64="$1" src_path="${2-}"
+
+  # v5.5+dt: xz only. The prefilter lives in the .xz block header, so no other
+  # stage -- manifest, decode, verify -- needs to know it happened. Any failure
+  # falls through to the untouched original path below.
+  if [[ "$DT_PREFILTER" != "0" && "$COMPRESS_MODE" == "xz" \
+        && -n "$src_path" && -f "$src_path" ]]; then
+    if dt_try "$tmp_b64" "$src_path"; then
+      return 0
+    fi
+  fi
+
   case "$COMPRESS_MODE" in
     xz)
       local xzt="$XZ_T"
@@ -443,6 +631,10 @@ strip_manifest() {
 # Lossless only: --ai rewrites staged copies in place and cannot stream.
 # ---------------------------------------------------------------------------
 sink_comp() {
+  # v5.5+dt: NO data-type prefilter here, deliberately. The sink path streams
+  # straight into rclone rcat and cannot rewind, so it can neither sniff the
+  # source nor build the two candidates the adopt-if-smaller rule compares.
+  # --sink artifacts stay exactly as they were.
   case "$COMPRESS_MODE" in
     xz)
       local xzt="$XZ_T"
@@ -1838,10 +2030,10 @@ encode_one() {
   if [[ -n "$use_ai" ]]; then
     TMP_AI="$(mktemp "${SMASH_TMP}/smash.ai.XXXXXX")"
     "$use_ai" "$src" "$TMP_AI"
-    encode_to_tmp "$TMP_B64" < "$TMP_AI"
+    encode_to_tmp "$TMP_B64" "$TMP_AI" < "$TMP_AI"
     rm -f "$TMP_AI"; TMP_AI=""
   else
-    encode_to_tmp "$TMP_B64" < "$src"
+    encode_to_tmp "$TMP_B64" "$src" < "$src"
   fi
 
   # Assemble final artifact: manifest header + payload + trailing newline.
