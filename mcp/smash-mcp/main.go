@@ -497,6 +497,54 @@ func parseManifest(path string) (map[string]string, int, error) {
 	return man, payload, sc.Err()
 }
 
+// payloadAlphabet reads the alphabet an artifact declares. v6.0 writes both a
+// "==== PAYLOAD (base85) ====" banner and a chain such as
+// "sp-v1( base85( brotli( tsv1( source ) ) ) )"; older artifacts have neither
+// and are base64. Either signal is accepted so the check works on artifacts
+// written before the banner named the real alphabet.
+func payloadAlphabet(manifest map[string]string) string {
+	// The chain is the authoritative signal; the banner is the fallback for
+	// artifacts written before it named the real alphabet.
+	for _, k := range []string{"encoding", "safety"} {
+		v := manifest[k]
+		if strings.Contains(v, "base85(") || strings.Contains(v, "b85(") ||
+			strings.Contains(v, "inert base85") {
+			return "base85"
+		}
+	}
+	return "base64"
+}
+
+// validBase85 reports whether every payload byte is in the RFC 1924 alphabet
+// smash uses (matching Python's base64.b85encode) and the length is decodable.
+// This is a character-class and length check, not a full decode: it is enough
+// to catch a truncated or corrupted payload without buffering a large artifact.
+func validBase85(r io.Reader) bool {
+	const alpha = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"!#$%&()*+-;<=>?@^_`{|}~"
+	var table [256]bool
+	for i := 0; i < len(alpha); i++ {
+		table[alpha[i]] = true
+	}
+	buf := make([]byte, 32*1024)
+	n := 0
+	for {
+		c, err := r.Read(buf)
+		for i := 0; i < c; i++ {
+			if !table[buf[i]] {
+				return false
+			}
+		}
+		n += c
+		if err != nil {
+			break
+		}
+	}
+	// A base85 group is 5 chars -> 4 bytes; a trailing group of exactly 1 char
+	// cannot encode anything, so it means the payload was clipped.
+	return n > 0 && n%5 != 1
+}
+
 func doManifest(a oneArtifactArgs) (interface{}, error) {
 	ap, err := pathAllowed(a.Artifact)
 	if err != nil {
@@ -506,19 +554,31 @@ func doManifest(a oneArtifactArgs) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	// validate base64 by streaming the non-# lines through the decoder
+	// Validate the payload against the alphabet the artifact ACTUALLY declares.
+	// v6.0 can emit base85, and hardcoding base64 here reported a perfectly
+	// good artifact as corrupt -- a false integrity failure, which is the worst
+	// kind for a tool whose job is to tell you whether your data is intact.
+	alphabet := payloadAlphabet(man)
 	f, _ := os.Open(ap)
 	defer f.Close()
 	valid := true
-	dec := base64.NewDecoder(base64.StdEncoding, filteredReader(f))
-	if _, err := io.Copy(ioutil.Discard, dec); err != nil {
-		valid = false
+	if alphabet == "base85" {
+		valid = validBase85(filteredReader(f))
+	} else {
+		dec := base64.NewDecoder(base64.StdEncoding, filteredReader(f))
+		if _, err := io.Copy(ioutil.Discard, dec); err != nil {
+			valid = false
+		}
 	}
 	return map[string]interface{}{
 		"artifact":     ap,
 		"bytes":        fileSize(ap),
 		"manifest":     man,
 		"hasManifest":  len(man) > 0,
+		"alphabet":     alphabet,
+		"payloadValid": valid,
+		// Retained so existing callers keep working; it now means "the payload
+		// is valid in its own alphabet", not "the payload is base64".
 		"base64Valid":  valid,
 		"payloadChars": payloadChars,
 		"evidence":     "OBSERVED",
@@ -605,7 +665,7 @@ func doCapabilities() (interface{}, error) {
 		"losslessModes":  modes,
 		"losslessEngine": "v5.6: JPEG sources whose lossless artifact would exceed the source run jxl lossless transcode (byte-exact, proven by reconstruction at encode time) + Base85 — smallest LOSSLESS artifact always wins; still-inflated results are reported honestly",
 		"mediaFit":       "v5.6: EXPLICIT opt-in only (fit:true / --fit): visually-equivalent JPEG re-encode until artifact < source; lossy: visual-fit + fit-sha256 in manifest; never automatic",
-		"artifactFormat": "<name>.smash.txt (ASCII manifest + base64 payload)",
+		"artifactFormat": "<name>.smash.txt (ASCII manifest + base64 or base85 payload)",
 		"transports":     []string{"stdio", "http-loopback"},
 		"limits": map[string]interface{}{
 			"maxBatchItems": maxBatchItems, "maxInlineTextBytes": maxInlineText,
