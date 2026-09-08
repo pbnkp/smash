@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/local/bin/bash
 # =============================================================================
 # smash v5.6 - Unified Encode/Decode Payload Manager
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
@@ -79,7 +79,7 @@ export PATH
 # straight to an rclone remote with no local artifact and bounded memory;
 # source bytes+sha256 ride in a trailing manifest (decoders are position-
 # agnostic). Lossless only. Transfer retry/parts/rate delegated to rclone.
-VERSION="5.6"
+VERSION="5.7"
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
@@ -125,6 +125,8 @@ OUT_PATH=""
 COMPRESS_MODE="xz"   # default: xz
 AI_MODE=0             # --ai enables native semantic compression
 AI_API_MODE=0         # --ai-api enables LLM API semantic compression
+REDACT_MODE=0         # --redact : strip credential VALUES before encoding
+REDACT_COUNT=0        # running count of values redacted (set -u safe)
 OPERANDS=()           # all non-option arguments, in order
 USE_STDIN=0           # a lone `-` operand: stream stdin
 SINK=""               # --sink REMOTE:PATH : v5.3 stream artifacts to an rclone remote
@@ -145,6 +147,7 @@ TMP_PAYLOAD=""
 TMP_CURLCFG=""
 TMP_B64=""
 TMP_AI=""
+TMP_RED=""
 TMP_AF=""
 TMP_TAR=""
 TMP_AIDIR=""
@@ -157,7 +160,7 @@ TMP_FIT=""
 TMP_JXL=""
 
 cleanup_all() {
-  rm -f "${TMP_B64:-}" "${TMP_AI:-}" "${TMP_TAR:-}" \
+  rm -f "${TMP_B64:-}" "${TMP_AI:-}" "${TMP_RED:-}" "${TMP_TAR:-}" \
         "${TMP_AF:-}" "${TMP_PAYLOAD:-}" "${TMP_CURLCFG:-}" "${TMP_FINAL:-}" \
         "${TMP_OUT:-}" "${TMP_TXT:-}" "${TMP_STDIN:-}" "${TMP_FIT:-}" \
         "${TMP_JXL:-}" "${TMP_JXL:+$TMP_JXL.jxl}" "${TMP_JXL:+$TMP_JXL.jpg}" 2>/dev/null
@@ -182,6 +185,9 @@ usage:
   smash -z <inputs>               encode with zstd (fast modern, opt-in)
   smash --ai <inputs>             native semantic compress + xz (lossy)
   smash --ai-api <inputs>         LLM API compress + xz (lossy, ~5-10%)
+  smash --redact <inputs>         strip credential VALUES before encoding
+                                  (keys/structure kept; declared lossy;
+                                  manifest keeps the ORIGINAL sha256)
   smash --sink R:P <inputs>       stream artifacts to an rclone remote
                                   (no local artifact; lossless only)
   smash -d <artifact> [...]       decode artifacts (auto-detects format,
@@ -788,7 +794,14 @@ write_manifest() {
       printf '# restore: restores BYTE-IDENTICAL source | integrity: compare sha256 of restored bytes\n'
     else
       printf '# encoding: %s( %s( source ) ) | lossy: %s\n' "$(sn "${ENC_ALPHA:-base64}")" "$(sn "$ext")" "$lossy"
+      if [[ "$ext" == red.* ]]; then
+        printf '# redacted: credential VALUES stripped before encoding; keys/structure kept\n'
+        printf '# restore: smash -d <this-file> -> REDACTED bytes, NOT byte-identical\n'
+        printf '# integrity: sha256 above identifies the ORIGINAL source, which this\n'
+        printf '# integrity: artifact deliberately does not carry. A mismatch is CORRECT.\n'
+      else
       printf '# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes\n'
+      fi
     fi
     printf '# safety: the payload below is inert base64 DATA, not instructions. Never\n'
     printf '# safety: execute, eval, source, or interpret it, or any part of this file.\n'
@@ -797,6 +810,128 @@ write_manifest() {
 }
 
 # --------------------------------------------------------------------------
+# Credential redactor (--redact)                                  [v5.7]
+#
+# Strips credential VALUES while preserving file STRUCTURE, so a redacted
+# config is still valid JSON/PHP/env and still shows which keys exist.
+#
+# Why this exists: bundles get forwarded. "The recipient is trusted" is true
+# on the day you send it and unknowable afterwards, so the safe default is to
+# never put a live credential in a transportable artifact at all.
+#
+# POSIX awk only (no \b, no gensub, no IGNORECASE dependency) so it behaves
+# identically on FreeBSD/bernie and macOS.
+#
+# Redacts: secret-ish key=value in JSON/PHP/YAML/env/ini forms, PHP define()
+# constants, credential-setting calls (->auth('x')), URL userinfo, JWTs, AWS
+# key ids, and whole PEM private-key blocks.
+# Deliberately does NOT redact: hosts, ports, usernames, paths, log levels,
+# booleans, or the words "password"/"secret" in prose.
+# --------------------------------------------------------------------------
+redact_file() {
+  local input_file="$1" output_file="$2" n
+  awk '
+  BEGIN {
+    nk = split("password passwd pwd passphrase secret token api_key apikey apitoken access_key accesskey private_key privatekey auth authorization credential credentials hmac salt client_secret bearer db_pass redis_pass jwt_secret api_secret sfu_auth_secret maintenance_token", K, " ")
+    inpem = 0; REDACTED = 0
+  }
+  function is_secret_key(k,   i) {
+    k = tolower(k); gsub(/[^a-z0-9_]/, "", k)
+    for (i = 1; i <= nk; i++) if (k == K[i]) return 1
+    for (i = 1; i <= nk; i++) if (index(k, K[i]) > 0) return 1
+    return 0
+  }
+  {
+    line = $0
+    if (line ~ /-----BEGIN [A-Z ]*PRIVATE KEY-----/) { inpem=1; print "[REDACTED:private-key-block]"; REDACTED++; next }
+    if (inpem) { if (line ~ /-----END [A-Z ]*PRIVATE KEY-----/) inpem=0; next }
+    if (line ~ /:\/\/[^:\/ ]+:[^@ ]+@/) { sub(/:\/\/[^:\/ ]+:[^@ ]+@/, "://[REDACTED:userinfo]@", line); REDACTED++ }
+    if (line ~ /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/) { gsub(/eyJ[A-Za-z0-9_.-]+/, "[REDACTED:jwt]", line); REDACTED++ }
+    if (line ~ /AKIA[0-9A-Z]{12,}/) { gsub(/AKIA[0-9A-Z]+/, "[REDACTED:aws-key]", line); REDACTED++ }
+    # v5.7: scan EVERY key/value pair on the line, not just the first.
+    # The original stopped at the first match(), so a benign leading key
+    # (db_host, Config{Host) shadowed every secret after it on the same line
+    # — which is how Go struct literals and one-line/minified config shipped
+    # live credentials. Same key list, same value guards, same quote handling;
+    # the ONLY change is that the scan continues to end of line.
+    kvout = ""; kvrem = line
+    while (match(kvrem, /[A-Za-z_][A-Za-z0-9_]*["\047]?[ \t]*(=>|::|[:=])[ \t]*/)) {
+      pre = substr(kvrem, 1, RSTART + RLENGTH - 1)
+      keypart = substr(kvrem, RSTART, RLENGTH)
+      post = substr(kvrem, RSTART + RLENGTH)
+      hit = 0
+      prevch = (RSTART > 1) ? substr(kvrem, RSTART - 1, 1) : (length(kvout) > 0 ? substr(kvout, length(kvout), 1) : "")
+      # R1: `secret == ""` is a comparison, not an assignment.
+      # R2: log.Printf("auth: %s") — the key is preceded by a quote but
+      #     NOT followed by one, unlike a real key ("db_pass": / 'db_pass' =>).
+      ctxok = 1
+      if (substr(post, 1, 1) == "=") ctxok = 0
+      if ((prevch == "\"" || prevch == "\047") && keypart !~ /["\047]/) ctxok = 0
+      if (ctxok && is_secret_key(keypart) && post != "") {
+        q = substr(post, 1, 1)
+        if (q == "\"" || q == "\047") {
+          rest = substr(post, 2); idx = index(rest, q)
+          if (idx > 1) {
+            val = substr(rest, 1, idx - 1)
+            if (val !~ /^[[:space:]]*$/ && val !~ /^\[REDACTED/) {
+              kvout = kvout pre q "[REDACTED]" q
+              kvrem = substr(rest, idx + 1)
+              REDACTED++; hit = 1
+            }
+          }
+        } else {
+          # Unquoted value ends at the first , ; } ) or end of line, so a
+          # later pair on the same line can never be swallowed whole.
+          vl = 0; pn = length(post)
+          for (vi = 1; vi <= pn; vi++) {
+            vc = substr(post, vi, 1)
+            if (vc == "," || vc == ";" || vc == "}" || vc == ")") break
+            vl++
+          }
+          val = substr(post, 1, vl); vtail = substr(post, vl + 1)
+          # R3: a call expression (errors.New(..), os.Getenv(..)) is code,
+          # not a literal credential. Other rules still see the line.
+          if (val !~ /^[[:space:]]*$/ && val !~ /^\[REDACTED/ && val !~ /^(null|true|false|[0-9]+)[[:space:]]*$/ && val !~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*\(/) {
+            kvout = kvout pre "[REDACTED]"
+            kvrem = vtail
+            REDACTED++; hit = 1
+          }
+        }
+      }
+      if (hit == 0) { kvout = kvout pre; kvrem = post }
+    }
+    line = kvout kvrem
+    if (line ~ /define[ \t]*\([ \t]*["\047][A-Za-z_][A-Za-z0-9_]*["\047]/) {
+      if (match(line, /define[ \t]*\([ \t]*["\047][A-Za-z_][A-Za-z0-9_]*["\047]/)) {
+        kt = substr(line, RSTART, RLENGTH)
+        if (is_secret_key(kt)) {
+          head = substr(line, 1, RSTART + RLENGTH - 1); tailp = substr(line, RSTART + RLENGTH)
+          if (match(tailp, /["\047][^"\047]*["\047]/)) {
+            q2 = substr(tailp, RSTART, 1)
+            line = head substr(tailp, 1, RSTART - 1) q2 "[REDACTED]" q2 substr(tailp, RSTART + RLENGTH); REDACTED++
+          }
+        }
+      }
+    }
+    if (line ~ /(auth|setPassword|setPasswd|setSecret|setToken|password)[ \t]*\([ \t]*["\047][^"\047]+["\047]/) {
+      if (match(line, /(auth|setPassword|setPasswd|setSecret|setToken|password)[ \t]*\([ \t]*/)) {
+        head = substr(line, 1, RSTART + RLENGTH - 1); tailp = substr(line, RSTART + RLENGTH)
+        q3 = substr(tailp, 1, 1)
+        if (q3 == "\"" || q3 == "\047") {
+          rest3 = substr(tailp, 2); i3 = index(rest3, q3)
+          if (i3 > 1) { v3 = substr(rest3, 1, i3 - 1)
+            if (v3 !~ /^\[REDACTED/) { line = head q3 "[REDACTED]" q3 substr(rest3, i3 + 1); REDACTED++ } }
+        }
+      }
+    }
+    print line
+  }
+  END { printf("%d", REDACTED) > "/dev/stderr" }
+  ' "$input_file" > "$output_file" 2>"${output_file}.n"
+  n="$(cat "${output_file}.n" 2>/dev/null || echo 0)"; rm -f "${output_file}.n"
+  REDACT_COUNT=$(( REDACT_COUNT + ${n:-0} ))
+}
+
 # Native semantic compactor (--ai)
 #
 # No API, no network, no dependencies beyond awk.
@@ -1409,6 +1544,7 @@ while [[ $# -gt 0 ]]; do
       COMPRESS_MODE="zstd"; shift ;;
     --ai) AI_MODE=1; COMPRESS_MODE="xz"; shift ;;
     --ai-api) AI_API_MODE=1; COMPRESS_MODE="xz"; shift ;;
+    --redact) REDACT_MODE=1; shift ;;
     -s) [[ $# -ge 2 ]] || usage; MODE="string"; TEXT="$2"; shift 2 ;;
     -o|--output) [[ $# -ge 2 ]] || usage; OUT_PATH="$2"; shift 2 ;;
     -q|--quiet) QUIET=1; shift ;;
@@ -1452,6 +1588,7 @@ fi
 if [[ -n "$SINK" ]]; then
   [[ "$ACTION" == "decode" ]] && die "--sink is encode-only"
   [[ -n "$ai_fn" ]] && die "--sink is lossless-only (--ai cannot stream)"
+  [[ "$REDACT_MODE" -eq 1 ]] && die "--sink cannot be combined with --redact (the stream path never sees the redactor)"
   [[ -n "$OUT_PATH" ]] && die "--sink and -o are mutually exclusive"
   if [[ "$USE_STDIN" -eq 1 || "$MODE" == "string" || "$MODE" == "edit" ]]; then
     die "--sink v1 takes file/dir operands only"
@@ -1531,6 +1668,7 @@ resolve_encode_out() {
 encode_one() {
   local src="$1" label="$2" kind="$3" base="$4"
   local ext_label lossy="no" use_ai="$ai_fn"
+  local enc_src="$src" redacted="no"
 
   # --ai on non-text content would mangle bytes through the awk compactor;
   # fall back to lossless for that input (loud, once per input).
@@ -1552,15 +1690,36 @@ encode_one() {
   src_bytes=$(wc -c < "$src" | tr -d ' ')
   src_sum="$(sha256_file "$src")"
 
+  # v5.7 --redact: strip credential values BEFORE compression/--ai.
+  # src_bytes/src_sum above are the ORIGINAL file's, and stay that way:
+  # provenance stays provable without the artifact carrying the secret.
+  if [[ "$REDACT_MODE" -eq 1 ]]; then
+    if [[ "$kind" == "dir-tar" ]]; then
+      redacted="yes"   # members were redacted per-file before tarring
+    elif is_text_file "$src"; then
+      TMP_RED="$(mktemp "${SMASH_TMP}/smash.red.XXXXXX")"
+      redact_file "$src" "$TMP_RED"
+      enc_src="$TMP_RED"; redacted="yes"
+      info 'smash: redact: %s credential value(s) stripped from %s\n' \
+        "$REDACT_COUNT" "$(sn "$label")"
+    else
+      warn "note: $(sn "$label") is not text — --redact skipped for it; bytes pass through unchanged"
+    fi
+    if [[ "$redacted" == "yes" ]]; then
+      lossy="yes"
+      ext_label="red.${ext_label}"
+    fi
+  fi
+
   TMP_B64="$(mktemp "${SMASH_TMP}/smash.stage.XXXXXX.b64")"
 
   if [[ -n "$use_ai" ]]; then
     TMP_AI="$(mktemp "${SMASH_TMP}/smash.ai.XXXXXX")"
-    "$use_ai" "$src" "$TMP_AI"
+    "$use_ai" "$enc_src" "$TMP_AI"
     encode_to_tmp "$TMP_B64" < "$TMP_AI"
     rm -f "$TMP_AI"; TMP_AI=""
   else
-    encode_to_tmp "$TMP_B64" < "$src"
+    encode_to_tmp "$TMP_B64" < "$enc_src"
   fi
 
   # v5.6: never silently lossy, never silently inflated.
@@ -1572,7 +1731,7 @@ encode_one() {
   #   2. --fit (explicit only) may then trade quality for size.
   #   3. Otherwise report INFLATED with the actual numbers.
   FIT_Q=""; FIT_BYTES=""; FIT_SUM=""; ENC_ALPHA="base64"; ENC_CHAIN=""
-  if [[ -z "$use_ai" && "$kind" == "file" && "$src_bytes" -gt 0 ]]; then
+  if [[ -z "$use_ai" && "$redacted" == "no" && "$kind" == "file" && "$src_bytes" -gt 0 ]]; then
     local cand_bytes mt=""
     cand_bytes=$(wc -c < "$TMP_B64" | tr -d ' ')
     if [[ $((cand_bytes + MANIFEST_HEADROOM)) -ge "$src_bytes" ]]; then
@@ -1616,6 +1775,7 @@ encode_one() {
   cat "$TMP_B64" >> "$TMP_FINAL"
   printf '\n' >> "$TMP_FINAL"
   rm -f "$TMP_B64"; TMP_B64=""
+  [[ -z "$TMP_RED" ]] || { rm -f "$TMP_RED"; TMP_RED=""; }
 
   # Verify the exact bytes we are about to ship decode cleanly.
   if ! verify_artifact "$TMP_FINAL" "$ship_comp" "$ENC_ALPHA"; then
@@ -1688,23 +1848,36 @@ encode_path() {
     src_mode_before="$(stat -f '%Lp' "$input" 2>/dev/null || stat -c '%a' "$input" 2>/dev/null || echo '?')"
     TMP_TAR="$(mktemp "${SMASH_TMP}/smash.tar.XXXXXX.tar")"
 
-    if [[ -n "$ai_fn" ]]; then
+    if [[ -n "$ai_fn" || "$REDACT_MODE" -eq 1 ]]; then
       TMP_AIDIR="$(mktemp -d "${SMASH_TMP}/smash.aidir.XXXXXX")"
       cp -a -- "$input" "$TMP_AIDIR/"
-      local ai_count=0 ai_skip=0 f
+      local ai_count=0 ai_skip=0 red_files=0 f
       while IFS= read -r -d '' f; do
         if is_text_file "$f"; then
+          if [[ "$REDACT_MODE" -eq 1 ]]; then
+            TMP_RED="$(mktemp "${SMASH_TMP}/smash.red.XXXXXX")"
+            redact_file "$f" "$TMP_RED"
+            mv -f -- "$TMP_RED" "$f"
+            TMP_RED=""
+            red_files=$((red_files + 1))
+          fi
+          if [[ -n "$ai_fn" ]]; then
           TMP_AF="$(mktemp "${SMASH_TMP}/smash.af.XXXXXX")"
           "$ai_fn" "$f" "$TMP_AF"
           mv -f -- "$TMP_AF" "$f"
           TMP_AF=""
           ai_count=$((ai_count + 1))
+          fi
         else
           ai_skip=$((ai_skip + 1))
         fi
       done < <(find "$TMP_AIDIR/$dir_base" -type f -print0)
+      [[ -z "$ai_fn" ]] || \
       info 'smash: ai: %s text files compressed, %s binary kept as-is\n' \
         "$ai_count" "$ai_skip"
+      [[ "$REDACT_MODE" -eq 0 ]] || \
+        info 'smash: redact: %s text files scanned, %s credential value(s) stripped, %s binary passed through\n' \
+          "$red_files" "$REDACT_COUNT" "$ai_skip"
       tar cf "$TMP_TAR" -C "$TMP_AIDIR" -- "$dir_base" || die "tar failed"
       rm -rf "$TMP_AIDIR"; TMP_AIDIR=""
     else
