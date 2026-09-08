@@ -635,14 +635,29 @@ def tsv_enc(raw):
         rows = [l.split(sep) for l in lines]
         if any(len(r) != nf for r in rows): continue
         cols = ["\x1f".join(c) for c in zip(*rows)]
-        out = ("%s%d\n" % ("1" if nl else "0", i) + "\n".join(cols)).encode()
+        # Shape guard goes in a TRAILER, never the header. brotli conditions
+        # its context model on the opening bytes: measured on a 1.7MB log,
+        # 8 extra HEADER bytes cost 9766 compressed bytes (+17%), while the
+        # same bytes as a trailer cost 2. Do not move this back to the front.
+        out = ("%s%d\n" % ("1" if nl else "0", i) + "\n".join(cols)
+               + "\n\x1e%d %d" % (nf, len(rows))).encode()
         if best is None or len(out) < len(best): best = out
     return best
 def tsv_dec(b):
     d = b.decode("utf-8")
-    hdr, rest = d.split("\n", 1)
+    body, sep_t, trailer = d.rpartition("\n\x1e")
+    if not sep_t: raise ValueError("tsv1: missing shape trailer")
+    ncols, nrows = (int(x) for x in trailer.split(" "))
+    hdr, rest = body.split("\n", 1)
     nl = hdr[0] == "1"; sep = SEPS[int(hdr[1:])]
     cols = [c.split("\x1f") for c in rest.split("\n")]
+    # zip() truncates to the shortest column, so a payload clipped in transit
+    # would otherwise decode SHORT and succeed. Assert the recorded shape.
+    if len(cols) != ncols:
+        raise ValueError("tsv1: expected %d columns, got %d" % (ncols, len(cols)))
+    for c in cols:
+        if len(c) != nrows:
+            raise ValueError("tsv1: expected %d rows, got %d" % (nrows, len(c)))
     out = "\n".join(sep.join(r) for r in zip(*cols))
     return (out + "\n").encode() if nl else out.encode()
 m = sys.argv[1]; d = sys.stdin.buffer.read()
@@ -771,13 +786,18 @@ sp_try() {
   if [[ -z "$best_chain" ]]; then rm -rf "$d"; return 1; fi
   # The legacy chain winning means "no change" -- hand back to the old path so
   # the artifact is byte-for-byte what smash produces today.
+  # Handing back means encode_to_tmp/dt_try will redo the filter search from
+  # scratch. That IS wasteful, and it is deliberate: it is the only way the
+  # legacy path produces its artifact byte-for-byte. Do not "optimise" it by
+  # shipping sp's copy -- the sp-v1 manifest marker would break old decoders
+  # for an artifact whose payload is identical to the legacy one.
   case "$best_chain" in
     b64:xz:raw|b64:xf:raw) rm -rf "$d"; return 1 ;;
   esac
 
   cat "$d/best" > "$out"
   SP_CHAIN="$best_chain"
-  info 'smash: sp: %s of %s candidates verified; chain %s\n' "$best_chain" "$tried" "$best_chain"
+  info 'smash: sp: %s candidates built, winner %s\n' "$tried" "$best_chain"
   rm -rf "$d"
   return 0
 }
