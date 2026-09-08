@@ -4,6 +4,73 @@ All notable changes to smash are documented here.
 
 ---
 
+## v6.0 — 2026-09-08 (CLI + apps + MCP) — "one version, and it proves its choices"
+
+Four lines had diverged with no superset among them: `main` 5.6 (jxl + b85),
+an unpushed 5.7 running on bernie (jxl + b85 + redact), a local 5.5+age line
+(age + `--tok`), and a dt/superposition line. v6.0 is the union.
+
+### Added
+- **Superposition engine.** Builds every viable chain over
+  `{raw, tsv1, jxl} x {xz, xz+BCJ/delta, brotli, zstd} x {base64, base85}`,
+  decodes and sha256-checks each candidate against the source, and ships only
+  the smallest one that SURVIVED verification. No new compression algorithm:
+  every primitive already shipped, and columnar transposition is what Parquet
+  and ORC have done for years. The value is entirely in the selection layer.
+- **`tsv1`** — column-major transposition of uniform delimited records. This is
+  what earns the large wins, because like-typed columns cluster and the entropy
+  coder finally sees the structure. Measured on real inputs, artifact bytes,
+  every row round-trip verified: logs −60%, CSV −83%, dir-tar −31%.
+- **`dt` prefilter** — xz BCJ/delta chosen from the source's magic bytes. The
+  filter lives in the .xz block header, so `xz -d` inverts it unaided and no
+  other stage needs to know it happened: WAV −54%, BMP −97%.
+- **`--redact`** (from the bernie line) — strips credential VALUES while
+  preserving structure, so a config stays valid and still shows which keys
+  exist. Records in the manifest that restore is NOT byte-identical.
+- **`--encrypt`** (age), **`--tok`**, **`--fit`**, and `redact_file` merged in.
+- **Apps.** `SmashKit` (shared, macOS + iOS), a SwiftUI macOS app with a
+  menubar item that shells out to the CLI, and an iOS artifact inspector that
+  restores natively for the one chain iOS can invert.
+
+### Changed
+- **`--exact` now means "skip the superposition"** (`SMASH_SP=0` is the env
+  alias), replacing v5.6's narrower "skip jxl", so there are not two
+  overlapping controls.
+- **`-g` / `-z` are PINS.** The engine was overriding them and shipping brotli
+  because brotli was smaller — which defeats the reason anyone asks for gzip,
+  usually a reader that can only invert that one format. `--level`/`--threads`
+  were already treated this way.
+- jxl is a transform inside the superposition rather than a parallel engine, so
+  it competes on the same collapse rule. It immediately won with brotli instead
+  of the xz that v5.6 hardcoded.
+
+### Fixed
+- **`--encrypt` silently disabled the whole engine.** Candidate verification
+  round-trips each chain, but `maybe_decrypt` keys off `$DEC_CIPHER`, unset at
+  encode time — so every candidate failed and sp fell back to the legacy chain.
+  Encrypted artifacts were losing the entire gain.
+- **The payload banner claimed base64 for base85 payloads.** Every reader keys
+  off that line, including the MCP server, which reported good artifacts as
+  invalid.
+- **The INFLATED warning fired on artifacts that had WON**, comparing against a
+  fixed 900-byte manifest guess when real manifests are ~370. A 780B source
+  compressing to 700B was reported as a failure.
+- **Redacted artifacts promised byte-identity they cannot keep.** They now say
+  a sha256 mismatch is correct.
+- **MCP `smash_manifest` validated base64 only**, so a base85 artifact came back
+  as a false integrity failure. It now detects the alphabet from the manifest.
+- **`.claude/helpers/boy-smash.sh` globbed `*.b64.*`**, a pre-v5 name, so its
+  `read`/`context`/`memory` subcommands had been dead since v5.0.
+
+### Notes
+- Artifacts on a non-legacy chain need a v6.0 decoder. Older smash fails loudly
+  ("File format not recognized") rather than corrupting. Inputs that gain
+  nothing hand back to the legacy path and stay byte-identical and readable by
+  older builds.
+- bernie has no python3, so base85 and the `tsv1` transform cannot run there.
+
+---
+
 ## v5.6 — 2026-08-14 (CLI + web + MCP 1.3) — "lossless always; no lipstick"
 
 Owner review of v5.5 called it straight: auto-degrading JPEG quality to win a
