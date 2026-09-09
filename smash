@@ -2485,6 +2485,12 @@ encode_one() {
 
   # v5.5: --tok routes text inputs to the token-optimal lossless family.
   # Non-text (including dir-tars) falls back to lossless xz, loudly.
+  # --tok dispatches before the redactor ever runs, so --redact was silently
+  # DROPPED and the credentials went into the payload in cleartext with no
+  # warning. A security flag that a mode cannot honour must refuse, not ignore.
+  if [[ "$TOK_MODE" -eq 1 && "$REDACT_MODE" -eq 1 ]]; then
+    die "--redact is not supported with --tok; run them separately"
+  fi
   if [[ "$TOK_MODE" -eq 1 ]]; then
     if is_text_file "$src"; then
       tok_encode_one "$src" "$label" "$kind" "$base"
@@ -2522,7 +2528,10 @@ encode_one() {
   # artifact is NOT byte-identical on restore, and says so in its manifest.
   if [[ "$REDACT_MODE" -eq 1 ]]; then
     if [[ "$kind" == "dir-tar" ]]; then
-      redacted="yes"          # members were redacted per-file before tarring
+      # Directory members are NOT redacted anywhere: the old comment claimed a
+      # per-file pass that does not exist, so the manifest swore credentials
+      # were stripped while shipping them verbatim. Refuse instead of lying.
+      die "--redact does not support directories yet; pass individual files"
     elif is_text_file "$src"; then
       TMP_RED="$(mktemp "${SMASH_TMP}/smash.red.XXXXXX")"
       redact_file "$src" "$TMP_RED"
@@ -2539,7 +2548,10 @@ encode_one() {
 
   if [[ -n "$use_ai" ]]; then
     TMP_AI="$(mktemp "${SMASH_TMP}/smash.ai.XXXXXX")"
-    "$use_ai" "$src" "$TMP_AI"
+    # $enc_src, NOT $src: with --redact, $enc_src is the redacted copy. Using
+    # $src here compacted the ORIGINAL, so --redact --ai printed a redaction
+    # receipt, stamped "lossy: redacted", and shipped every secret verbatim.
+    "$use_ai" "$enc_src" "$TMP_AI"
     encode_to_tmp "$TMP_B64" "$TMP_AI" < "$TMP_AI"
     rm -f "$TMP_AI"; TMP_AI=""
   else
