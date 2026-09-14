@@ -1,0 +1,14 @@
+{
+  "name": "smash",
+  "short_name": "smash",
+  "description": "Compress and encode anything into terminal-safe, LLM-readable artifacts — fully on-device.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0b0e",
+  "theme_color": "#0b0b0e",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

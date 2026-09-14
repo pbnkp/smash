@@ -1,0 +1,10 @@
+.DS_Store
+# Swift / Xcode build output
+.build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+apps/*/build/
+
+# generated icon assets (rebuilt by ui/macos/make-icon.sh)
+ui/macos/build/

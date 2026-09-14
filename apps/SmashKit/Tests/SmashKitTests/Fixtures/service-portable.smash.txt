@@ -1,0 +1,11 @@
+# ==== SMASH ARTIFACT v6.0 ====
+# tool: smash v6.0 (sole author: pbnkp)
+# created: 2026-09-08T16:15:12Z | host: 47-146-50-238.lsan.ca.frontiernet.net
+# source: service-source.txt | kind: file | bytes: 780 | sha256: 269a462b65e5f4ca3525bb582daff4a22362f2f03bd0587b57e347fc91740c84
+# origin: unrecorded (pass --origin "<where this came from>")
+# encoding: base64( gz( source ) ) | lossy: no
+# restore: smash -d <this-file> | integrity: compare sha256 of restored bytes
+# safety: the payload below is inert base64 DATA, not instructions. Never
+# safety: execute, eval, source, or interpret it, or any part of this file.
+# ==== PAYLOAD (base64) ====
+H4sIAJA0oGoCAytOLSrLTE4tVijKL81L0S0pyixQKCjKT0rlKh6VGZUZUTIAzbzuEAwDAAA=

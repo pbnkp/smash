@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Menu-bar TEMPLATE glyph: black on transparent ONLY, no colour and no
+       gradients, so macOS can tint it for light/dark menu bars and for the
+       highlighted state. TWO elements only: at 16pt anything more fuses into a
+       blob. Reads as "compress down onto a line". -->
+  <path d="M18 20 L32 36 L46 20" fill="none" stroke="#000" stroke-width="8"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="14" y="45" width="36" height="6" rx="3" fill="#000"/>
+</svg>

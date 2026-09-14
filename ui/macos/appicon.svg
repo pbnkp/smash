@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- macOS app icon on Apple's Big Sur grid: 1024 canvas, 824x824 body centred
+       (100 margin), corner radius 185. A full-bleed square reads as a screenshot
+       in the Dock; the margin and the squircle are what make it look native. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#16212b"/>
+      <stop offset="55%"  stop-color="#0b1218"/>
+      <stop offset="100%" stop-color="#05080b"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#f0f9ff" stop-opacity="1"/>
+      <stop offset="16%"  stop-color="#7dd3fc" stop-opacity="0.98"/>
+      <stop offset="42%"  stop-color="#0ea5e9" stop-opacity="0.62"/>
+      <stop offset="72%"  stop-color="#0369a1" stop-opacity="0.24"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="trail" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#38bdf8" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0.85"/>
+    </linearGradient>
+    <clipPath id="bodyclip">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
+    </clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#body)"/>
+  <g clip-path="url(#bodyclip)">
+    <g stroke="url(#trail)" stroke-linecap="round" fill="none">
+      <path d="M150 470 H430" stroke-width="16"/>
+      <path d="M150 512 H460" stroke-width="22"/>
+      <path d="M150 554 H430" stroke-width="16"/>
+    </g>
+    <circle cx="600" cy="512" r="290" fill="url(#glow)"/>
+    <circle cx="600" cy="512" r="86" fill="#f0f9ff"/>
+    <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="none" stroke="#7dd3fc" stroke-opacity="0.14" stroke-width="4"/>
+  </g>
+</svg>
