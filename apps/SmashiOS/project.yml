@@ -10,18 +10,25 @@ targets:
   SmashiOS:
     type: application
     platform: iOS
-    sources: [Sources]
+    sources:
+      - Sources
+      - path: ../SmashMac/Sources/SmashMac/SmashPlay.swift
+      - path: Resources
+        buildPhase: resources
     dependencies:
       - package: SmashKit
         product: SmashKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pbnkp.smash.ios
-        MARKETING_VERSION: "6.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "6.1"
+        CURRENT_PROJECT_VERSION: "6.1.1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_CFBundleDisplayName: Smash
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         CODE_SIGNING_ALLOWED: NO
         SWIFT_VERSION: "6.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

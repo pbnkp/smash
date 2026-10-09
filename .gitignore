@@ -5,6 +5,7 @@ DerivedData/
 *.xcodeproj/
 *.xcworkspace/
 apps/*/build/
-
-# generated icon assets (rebuilt by ui/macos/make-icon.sh)
-ui/macos/build/
+ui/macos/dist-mac/
+mcp/smash-mcp/smash-mcp
+mcp/smash-mcp/smash-mcp-*
+dist-release/

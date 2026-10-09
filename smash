@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
 # smash - Unified Encode/Decode Payload Manager
-# VERSION IS A SINGLE SOURCE OF TRUTH: the `VERSION=` assignment below is the only
-# place it lives. Do not restate it here or in usage().
+# VERSION IS A SINGLE SOURCE OF TRUTH: the `VERSION=` assignment below is the
+# only place it lives. Do not restate it in this header or in usage(). Before
+# v6.1 this header said 5.3, VERSION said 6.0 and usage said 5.3, so nobody
+# could tell which token behaviour they were running.
 # Sole author: pbnkp. Copyright (c) 2026 pbnkp. MIT.
-# Host: dual — FreeBSD 12.1 + macOS (darwin). bash 3.2-safe.
+# Host: dual — bernie (FreeBSD 12.1) + Mac (darwin). bash 3.2-safe.
 #
 # Compression modes:
 #   xz       (default)  — lossless, excellent ratio
@@ -40,7 +42,7 @@
 #     works on encode (dir or filename prefix); unique-name suffix keeps
 #     the .txt ending; -V/--version added.
 #
-# v5.1 — the "never touch live" release (2026-07-13, born from a live-server
+# v5.1 — the "never touch live" release (2026-07-13, born from the bernie
 #   webroot incident):
 #   - WEBROOT/LIVE-MOUNT GUARD: artifacts are never written into web-served
 #     or live-mounted trees (public_html, ShellFish CloudStorage, htdocs,
@@ -70,13 +72,28 @@ export PATH
 # straight to an rclone remote with no local artifact and bounded memory;
 # source bytes+sha256 ride in a trailing manifest (decoders are position-
 # agnostic). Lossless only. Transfer retry/parts/rate delegated to rclone.
-VERSION="6.1"   # SSOT - header and usage() derive from this, never restate it
+VERSION="6.1"   # SSOT — header and usage() derive from this, never restate it
 
 # sn(): strip ALL control bytes (0x00-0x1f, 0x7f) from a string before it is
 # printed to the terminal. Kills ANSI/OSC escape injection via filenames or
 # API error bodies. High bytes are kept (valid UTF-8 stays readable; modern
 # terminals do not execute raw C1 bytes in UTF-8 mode).
 sn() { printf '%s' "${1-}" | LC_ALL=C tr -d '\000-\037\177'; }
+
+# Provenance host label. A full hostname on a home machine is often the ISP's
+# reverse-DNS of the public IP, and artifacts get shared. Record the short
+# local name. SMASH_HOST overrides it. SMASH_HOST=- records nothing.
+host_label() {
+  if [[ -n "${SMASH_HOST-}" ]]; then
+    if [[ "$SMASH_HOST" == "-" ]]; then printf 'unrecorded'; else printf '%s' "$SMASH_HOST"; fi
+    return 0
+  fi
+  local h=""
+  if command -v scutil >/dev/null 2>&1; then h="$(scutil --get LocalHostName 2>/dev/null || true)"; fi
+  [[ -n "$h" ]] || h="$(hostname -s 2>/dev/null || true)"
+  [[ -n "$h" ]] || h="$(hostname 2>/dev/null | cut -d. -f1)"
+  printf '%s' "${h:-unknown}"
+}
 
 die() { printf 'smash: %s\n' "$(sn "$*")" 1>&2; exit 2; }
 warn() { printf 'smash: %s\n' "$(sn "$*")" 1>&2; return 0; }
@@ -109,6 +126,14 @@ THREADS=""        # --threads N: xz/zstd thread count (default 0 = all cores)
 # Callers pass user-controlled values (filenames, API output) through sn().
 info() { if [[ "$QUIET" -eq 0 ]]; then printf "$@" 1>&2; fi; return 0; }
 
+# emit_path: Finder services set SMASH_PRINT_PATH=1 and -q. One result path
+# on stdout, no prefix, so the service can reveal it. -q alone stays silent.
+emit_path() {
+  [[ "${SMASH_PRINT_PATH:-0}" == "1" ]] || return 0
+  [[ -n "${1:-}" ]] || return 0
+  printf '%s\n' "$1"
+}
+
 ACTION="encode"
 MODE="auto"
 TEXT=""
@@ -117,19 +142,21 @@ COMPRESS_MODE="xz"   # default: xz
 AI_MODE=0             # --ai enables native semantic compression
 AI_API_MODE=0         # --ai-api enables LLM API semantic compression
 TOK_MODE=0            # --tok: token-optimal LOSSLESS text artifact (v5.5)
-TOKDICT="${SMASH_TOKDICT:-$HOME/.local/share/smash/tokdict-v1.tsv}"
+TOKDICT="${SMASH_TOKDICT:-$HOME/.local/share/smash/tokdict-v1.tsv}"  # shared phrase library (one phrase per line)
 # --- token measurement (v6.1) ------------------------------------------------
-# Exact counting where a tokenizer is installed; a SEGMENT-AWARE estimate
-# elsewhere. Either way every printed number carries its provenance, because a
-# number whose origin you cannot see is not a measurement. install.sh sets the
-# tokenizer up; hosts without python3 fall back and SAY so.
+# Exact counting is available wherever the shipped venv exists (Mac); elsewhere
+# (bernie: no python3) smash falls back to a SEGMENT-AWARE estimate and every
+# printed number carries its provenance. A proxy labelled honestly beats a
+# guess labelled nothing.
 TOKPY="${SMASH_TOKPY:-$HOME/.local/share/smash/tokvenv/bin/python}"
 TOKCOUNT="${SMASH_TOKCOUNT:-$HOME/.local/share/smash/tokcount.py}"
 TOKCONST="${SMASH_TOKCONST:-$HOME/.local/share/smash/tok-constants.tsv}"
-# Provenance cannot be a plain variable: callers read tok_count through a command
-# substitution, which is a subshell, so an assignment inside it is lost. A state
-# file crosses that boundary.
-TOK_PROV_FILE="${TMPDIR:-/tmp}/smash.prov.$$"  # shared phrase library (one phrase per line)
+# Provenance CANNOT be a plain variable: every caller reads tok_count through a
+# command substitution, which is a subshell, so an assignment inside it is lost
+# and the label would read "unset" forever (caught by test, not by reading —
+# it silently forced the --tok A/B gate down its UNPROVEN branch every run).
+# A tiny state file crosses the subshell boundary; a variable cannot.
+TOK_PROV_FILE="${TMPDIR:-/tmp}/smash.prov.$$"
 OPERANDS=()           # all non-option arguments, in order
 USE_STDIN=0           # a lone `-` operand: stream stdin
 SINK=""               # --sink REMOTE:PATH : v5.3 stream artifacts to an rclone remote
@@ -172,7 +199,7 @@ cleanup_all() {
 trap cleanup_all EXIT INT HUP TERM
 
 usage() {
-  printf 'smash v%s - encode/decode payload manager\n' "$VERSION" 1>&2
+  printf 'smash v%s — encode/decode payload manager\n' "$VERSION" 1>&2
   cat 1>&2 <<'EOF'
 
 usage:
@@ -186,6 +213,8 @@ usage:
   smash -z <inputs>               encode with zstd (fast modern, opt-in)
   smash --ai <inputs>             native semantic compress + xz (lossy)
   smash --ai-api <inputs>         LLM API compress + xz (lossy, ~5-10%)
+  smash --redact <inputs>         strip credential VALUES, then encode
+  smash --exact <inputs>          legacy xz + base64 (skip superposition)
   smash --tok <inputs>            token-optimal LOSSLESS text artifact (v5.5):
                                   payload stays LLM-readable; repeated phrases
                                   fold to ~X codes; verify = round-trip sha
@@ -221,7 +250,7 @@ options:
                   Global toggle: `echo on > ~/.config/smash/encrypt`.
                   Decode auto-detects from the manifest cipher field.
   --sink R:PATH   Stream each artifact to an rclone remote destination
-                  (e.g. myremote:backups/smash/). Encode-only,
+                  (e.g. nkp@b2:oink-boy-vault/stream/). Encode-only,
                   lossless-only, no local artifact; source bytes+sha256
                   ride in a trailing manifest. smash -d restores as usual.
   --sink-verify   After upload: re-download, decode, compare bytes+sha256
@@ -232,7 +261,13 @@ options:
                   the artifact otherwise has no trace of its origin.
   --origin-auto   Also record cwd and the invoking process. Opt-in: it
                   embeds local paths in an artifact you may share.
-  -q, --quiet     Suppress progress output (errors still print)
+  --exact         Skip superposition. Ship legacy xz + base64 so an older
+                  smash, and a paste into a chat, can both read it.
+  --redact        Strip credential VALUES before encoding. Keys and file
+                  structure stay. Directories are refused. The manifest
+                  says lossy: redacted. Not combined with --tok.
+  -q, --quiet     Suppress progress on stderr (errors still print).
+                  With SMASH_PRINT_PATH=1 the result path is one stdout line.
   -o, --output    Output directory (multi-input) or path/prefix (single)
   -V, --version   Print version and exit
   -h, --help      Show this help
@@ -247,6 +282,9 @@ artifacts:
 
 env:
   B64_OUTDIR=/some/dir          default output directory
+  SMASH_PRINT_PATH=1            print the result path on stdout (one line).
+                                Finder services set this together with -q.
+  SMASH_HOST=name               manifest host label. "-" records nothing.
   SMASH_ALLOW_UNSAFE_OUTDIR=1   permit artifacts/extraction inside web-served
                                 or live-mounted dirs (guarded since v5.1)
 
@@ -327,7 +365,7 @@ ensure_outdir() {
 }
 
 # ---------------------------------------------------------------------------
-# v5.1 SAFETY GUARDS (2026-07-13; born from a live webroot incident).
+# v5.1 SAFETY GUARDS (2026-07-13; born from the bernie webroot incident).
 # Artifacts must never land in a web-served or live-mounted tree, and smash
 # must never mutate its input. Guards fire on encode output, -o, and .dtar
 # auto-extraction. Deliberate override: SMASH_ALLOW_UNSAFE_OUTDIR=1.
@@ -426,11 +464,11 @@ cipher_line() {
 # `xz -d` inverts it with no help from us. decode_to_tmp, verify_artifact,
 # write_manifest and the artifact format are therefore ALL UNTOUCHED: an
 # artifact built with a prefilter still decodes on older smash builds and on
-# the oldest supported host. Nothing about the artifact changes except how many bytes it is.
+# bernie. Nothing about the artifact changes except how many bytes it is.
 #
-# FLEET FLOOR: the oldest supported host runs xz 5.2.4 (FreeBSD 12.1), which has x86 / arm /
+# FLEET FLOOR: bernie runs xz 5.2.4 (FreeBSD 12.1), which has x86 / arm /
 # armthumb / powerpc / sparc / delta but NOT arm64 and NOT riscv. Emitting a
-# filter that older liblzma cannot decode would create artifacts that are
+# filter bernie's liblzma cannot decode would create artifacts that are
 # undecodable in production, so arm64 sources deliberately get NO filter.
 # Do not add one without re-probing every host that decodes.
 #
@@ -485,7 +523,7 @@ dt_filter_for() {
         40)      printf -- '--arm' ;;       # EM_ARM
         20|21)   printf -- '--powerpc' ;;   # EM_PPC / EM_PPC64
         2|43|18) printf -- '--sparc' ;;     # EM_SPARC / V9 / 32PLUS
-        *)       printf '' ;;               # 183 = AArch64: unsupported on xz 5.2.4
+        *)       printf '' ;;               # 183 = AArch64: unsupported on bernie
       esac
       return 0 ;;
 
@@ -494,7 +532,7 @@ dt_filter_for() {
       case "${m:8:8}" in
         07000001|07000000) printf -- '--x86' ;;   # 0x01000007 x86_64 / 0x7 i386
         0c000000)          printf -- '--arm' ;;   # 0xc CPU_TYPE_ARM (32-bit)
-        *)                 printf '' ;;           # 0c000001 = ARM64: older liblzma
+        *)                 printf '' ;;           # 0c000001 = ARM64: bernie's
       esac                                        # xz 5.2.4 has no --arm64
       return 0 ;;
 
@@ -605,7 +643,7 @@ dt_try() {
 # never put a live credential in a transportable artifact at all.
 #
 # POSIX awk only (no \b, no gensub, no IGNORECASE dependency) so it behaves
-# identically on FreeBSD and macOS.
+# identically on FreeBSD/bernie and macOS.
 #
 # Redacts: secret-ish key=value in JSON/PHP/YAML/env/ini forms, PHP define()
 # constants, credential-setting calls (->auth('x')), URL userinfo, JWTs, AWS
@@ -1175,15 +1213,16 @@ encode_stream_to_sink() {
   tmp_cnt="$(mktemp "${SMASH_TMP}/smash.sinkcnt.XXXXXX")"
   tmp_rc="$(mktemp "${SMASH_TMP}/smash.sinkrc.XXXXXX")"
 
-  # --sink keeps no local artifact, so there is nothing to count a paste cost
-  # against. Say what the streamed thing IS instead.
-  info 'smash: sink: %s (%s) -> %s [base64 transport artifact - for storage/transfer, never for pasting into a context window]\n' \
+  # --sink streams to a remote and keeps no local artifact, so there is nothing
+  # to count a paste cost against. Say what the streamed thing IS instead, so the
+  # mode is not the one place that stays silent about token cost.
+  info 'smash: sink: %s (%s) -> %s [base64 transport artifact — for storage/transfer, never for pasting into a context window]\n' \
     "$(sn "$label")" "$kind" "$(sn "$dest")"
 
   {
     printf '# ==== SMASH ARTIFACT v%s ====\n' "$VERSION"
     printf '# tool: smash v%s (sole author: pbnkp)\n' "$VERSION"
-    printf '# created: %s | host: %s\n' "$(utc_ts)" "$(sn "$(hostname 2>/dev/null || printf 'unknown')")"
+    printf '# created: %s | host: %s\n' "$(utc_ts)" "$(sn "$(host_label)")"
     printf '# source: %s | kind: %s | bytes: TRAILING | sha256: TRAILING\n' \
       "$(sn "$label")" "$(sn "$kind")"
     origin_line
@@ -1410,7 +1449,7 @@ write_manifest() {
   {
     printf '# ==== SMASH ARTIFACT v%s ====\n' "$VERSION"
     printf '# tool: smash v%s (sole author: pbnkp)\n' "$VERSION"
-    printf '# created: %s | host: %s\n' "$(utc_ts)" "$(sn "$(hostname 2>/dev/null || printf 'unknown')")"
+    printf '# created: %s | host: %s\n' "$(utc_ts)" "$(sn "$(host_label)")"
     printf '# source: %s | kind: %s | bytes: %s | sha256: %s\n' \
       "$(sn "$src_label")" "$(sn "$kind")" "$(sn "$bytes")" "$(sn "$sum")"
     origin_line
@@ -2078,16 +2117,16 @@ RULES:
 # in the manifest so the artifact stays self-contained.
 #
 # Token math is heuristic inside smash (est = bytes/4; no tokenizer on
-# hosts without python3). If SMASH_TOKCOUNT_CMD is set (reads text on stdin, prints an
+# bernie). If SMASH_TOKCOUNT_CMD is set (reads text on stdin, prints an
 # integer token count), exact counts are reported instead of estimates.
 # ==========================================================================
 
-# tok_constant <bucket> -> bytes per token. DERIVED, never folklore: run
-# tools/derive-tok-constants.sh to remeasure over your own corpora. Fallbacks are
-# that script's measured output (prose 3.595 over 37,821B - code 3.294 over
-# 146,175B - base64 1.468 over 79,563B). The old `bytes/4` for every content type
-# measured -63.1% on base64, -10% on prose, -18% on code: wrong in the flattering
-# direction, and worst on smash's OWN primary output format.
+# tok_constant <bucket> -> bytes per token. Values are DERIVED, never folklore:
+# ~/.local/share/smash/derive-tok-constants.sh measures them over real corpora
+# and writes $TOKCONST. Fallbacks below are that script's 2026-09-14 output
+# (prose 3.595 over 37,821B · code 3.294 over 146,175B · b64 1.468 over 79,563B).
+# The old `bytes/4` for everything measured -63.1% on base64, -10% on prose,
+# -18% on code: wrong in the flattering direction, worst on smash's OWN output.
 tok_constant() {
   local bucket="$1" v=""
   if [[ -r "$TOKCONST" ]]; then
@@ -2100,10 +2139,12 @@ tok_constant() {
   esac
 }
 
-# tok_est <file> - SEGMENT-AWARE estimate, always labelled est(seg) upstream.
-# An artifact is mixed: manifest/tokdict comment lines (prose-shaped) then a
-# base64 payload whose token density is ~2.4x worse. Classifying the FILE as one
-# or the other is the mistake; classify per LINE and sum.
+# tok_est <file> — SEGMENT-AWARE estimate, always labelled est(seg) upstream.
+# A smash artifact is mixed: manifest/tokdict comment lines (prose-shaped) then
+# a base64 payload whose token density is ~2.4x worse. Classifying the FILE as
+# one or the other is the exact mistake rule 90-caliber warns about, so classify
+# per line and sum. A long line that is pure base64 alphabet goes in the b64
+# bucket; everything else is prose.
 tok_est() {
   local f="$1" cb cp out
   cb="$(tok_constant b64)"; cp="$(tok_constant prose)"
@@ -2119,13 +2160,16 @@ tok_est() {
   local b; b=$(wc -c < "$f" | tr -d ' '); printf '%s' "$(( (b + 3) / 4 ))"
 }
 
+# tok_prov_set / tok_prov — provenance of the LAST tok_count, via a state file so
+# it survives the command substitution every caller wraps tok_count in.
 tok_prov_set() { printf '%s' "$1" > "$TOK_PROV_FILE" 2>/dev/null || true; }
 tok_prov() {
   if [[ -r "$TOK_PROV_FILE" ]]; then cat "$TOK_PROV_FILE" 2>/dev/null || printf 'unset'
   else printf 'unset'; fi
 }
 
-# tok_count <file> - exact when a counter is reachable, estimate otherwise.
+# tok_count <file> — exact when a counter is reachable, estimate otherwise.
+# ALWAYS records provenance so the caller can print where the number came from.
 tok_count() {
   local f="$1" n=""
   if [[ -n "${SMASH_TOKCOUNT_CMD:-}" ]]; then
@@ -2140,13 +2184,14 @@ tok_count() {
   tok_est "$f"
 }
 
+# tok_is_exact — true when the last tok_count produced a counted, not modelled, number.
 tok_is_exact() { [[ "$(tok_prov)" == exact* ]]; }
 
-# paste_verdict <src|""> <src_bytes> <artifact> - the truth every encode mode owes.
+# paste_verdict <src|""> <src_bytes> <artifact> — the truth EVERY encode mode owes.
 # Disk bytes and context tokens move in OPPOSITE directions for a base64
-# artifact: measured, xz+base64 of a mixed-content file is ~half the bytes and
-# ~124% of the tokens. Modes that emit base64 must say so instead of printing a
-# flattering compression ratio and stopping.
+# artifact: measured 2026-09-14 on MEMORY.md, xz+base64 is 42% smaller on disk
+# and +32.8% in tokens. Modes that emit base64 must say so rather than printing
+# a flattering compression ratio and stopping.
 paste_verdict() {
   local src="$1" sb="$2" art="$3" at st prov pct
   at="$(tok_count "$art")"; prov="$(tok_prov)"
@@ -2155,18 +2200,17 @@ paste_verdict() {
   if [[ -n "$st" && "$st" -gt 0 ]]; then
     pct=$(( at * 100 / st ))
     if [[ "$pct" -gt 100 ]]; then
-      info 'smash: PASTE COST: %s tok vs source %s (%s%%) [%s] - DISK/TRANSPORT ONLY: pasting this costs MORE context than the source. Use --tok for an LLM-readable payload.\n' \
+      info 'smash: PASTE COST: %s tok vs source %s (%s%%) [%s] — DISK/TRANSPORT ONLY: pasting this costs MORE context than the source. Use --tok for an LLM-readable payload.\n' \
         "$at" "$st" "$pct" "$prov"
     else
-      info 'smash: PASTE COST: %s tok vs source %s (%s%%) [%s] - cheaper than the source in context.\n' \
+      info 'smash: PASTE COST: %s tok vs source %s (%s%%) [%s] — cheaper than the source in context.\n' \
         "$at" "$st" "$pct" "$prov"
     fi
   else
-    info 'smash: PASTE COST: %s tok [%s] - DISK/TRANSPORT ONLY; no source token count to compare.\n' \
+    info 'smash: PASTE COST: %s tok [%s] — DISK/TRANSPORT ONLY; source token count unavailable for comparison.\n' \
       "$at" "$prov"
   fi
 }
-
 
 # write_manifest_tok <out> <src_label> <kind> <bytes> <sha256> <finalnl> <entries>
 # Caller appends `# tokdict:` lines, the payload marker, then the payload.
@@ -2176,7 +2220,7 @@ write_manifest_tok() {
   local out="$1" src_label="$2" kind="$3" bytes="$4" sum="$5" finalnl="$6" entries="$7"
   {
     printf '# ==== SMASH ARTIFACT v%s | tok-v1 | %s | host: %s ====\n' \
-      "$VERSION" "$(utc_ts)" "$(sn "$(hostname 2>/dev/null || printf 'unknown')")"
+      "$VERSION" "$(utc_ts)" "$(sn "$(host_label)")"
     printf '# source: %s | kind: %s | bytes: %s | sha256: %s\n' \
       "$(sn "$src_label")" "$(sn "$kind")" "$(sn "$bytes")" "$(sn "$sum")"
     origin_line
@@ -2254,12 +2298,14 @@ tok_transform() {
         }
         if (c >= 2 && (!(p in cnt) || cnt[p] < c)) cnt[p] = c
       }
-      # MEASURED accounting (o200k): a ~X code costs 2 tokens where the phrase
-      # stood ("~1".."~99" all encode to 2); a dict line costs the phrase + 8
-      # tokens of framing (measured 7-8 across phrase lengths 1..9 tokens; 8 is
-      # the conservative end, so a marginal entry is rejected rather than
-      # shipped at a loss). Previously guessed at 3 and 6 - wrong in OPPOSITE
-      # directions. The A/B gate is the backstop either way.
+      # MEASURED accounting (o200k, 2026-09-14 — was guessed at 3 and 6):
+      #   a ~X code costs 2 tokens where the phrase stood ("~1".."~99" all
+      #   encode to 2; marginal insertion cost mid-sentence is 1).
+      #   a dict line costs the phrase + 8 tokens of framing (measured 7-8
+      #   across phrase lengths 1..9 tokens; 8 is the conservative end, so a
+      #   marginal entry is rejected rather than shipped at a loss).
+      # Reproduce: ~/.local/share/smash/tests/tok-regressions.sh notes the
+      # method; the A/B gate in tok_encode_one is the backstop either way.
       m = 0
       for (p in cnt) {
         c = cnt[p]; if (c < 2) continue
@@ -2371,10 +2417,11 @@ tok_encode_one() {
     local a_prov="$(tok_prov)"
     b_tok="$(tok_count "$tmp_b")"
     # The gate may only CLAIM a winner when both numbers were counted. Two
-    # estimates differing by a few percent cannot order two variants.
+    # estimates that differ by a few percent cannot order two variants, and
+    # choosing silently from them is the caliber failure this tool shipped with.
     if [[ "$a_prov" == exact* && "$(tok_prov)" == exact* ]]; then
       if [[ "$b_tok" -lt "$a_tok" ]]; then
-        info 'smash: tok: dictionary variant loses (%s vs %s, %s) - shipping plain-text variant\n' \
+        info 'smash: tok: dictionary variant loses (%s vs %s, %s) — shipping plain-text variant\n' \
           "$a_tok" "$b_tok" "$(tok_prov)"
         mv -f "$tmp_b" "$TMP_FINAL"
         entries=0
@@ -2383,7 +2430,9 @@ tok_encode_one() {
         rm -f "$tmp_b"
       fi
     else
-      info 'smash: tok: A/B gate UNPROVEN - no exact token counter reachable (%s); keeping dictionary variant (est %s vs %s). Install the tokenizer or set SMASH_TOKCOUNT_CMD to let the count decide.\n' \
+      # No exact counter reachable: keep the dictionary variant (the selection
+      # heuristic's proposal) and say plainly that the choice is UNPROVEN.
+      info 'smash: tok: A/B gate UNPROVEN — no exact token counter reachable (%s); keeping dictionary variant (est %s vs %s). Install the tokenizer or set SMASH_TOKCOUNT_CMD to let the count decide.\n' \
         "$(tok_prov)" "$a_tok" "$b_tok"
       rm -f "$tmp_b"
     fi
@@ -2417,6 +2466,9 @@ tok_encode_one() {
   } > "$pt"
   paste_tok="$(tok_count "$pt")"
   rm -f "$pt"
+  # Provenance, not the presence of one env var, decides the label. Before v6.1
+  # this said "est-tokens" whenever SMASH_TOKCOUNT_CMD was unset even if an
+  # exact counter was reachable, and "tokens" if it was set even when it failed.
   unit="$(tok_prov)-tokens"
   local pct_art=100 pct_paste=100
   if [[ "$src_tok" -gt 0 ]]; then
@@ -2429,6 +2481,7 @@ tok_encode_one() {
   move_final "$TMP_FINAL" "$final_out"
   TMP_FINAL=""
   info 'encoded: %s\n' "$(sn "$final_out")"
+  emit_path "$final_out"
 }
 
 # ---- parse args ----
@@ -2476,11 +2529,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# v5.5+age: resolve the opt-in encryption switch (encode side only — decode
-# is driven by each artifact's own manifest cipher field, never by config).
 # --tokinfo: read-only token introspection. Makes every mode's numbers auditable
-# and is what the regression suite asserts against, so the measurement path
-# cannot silently regress to bytes/4 again.
+# and is what the regression suite asserts against, so the measurement path can
+# never silently regress to bytes/4 again. Prints TSV: file bytes tokens provenance
+# bytes_per_token. Writes nothing, encodes nothing.
 if [[ "$ACTION" == "tokinfo" ]]; then
   [[ ${#OPERANDS[@]} -gt 0 ]] || die "--tokinfo needs at least one file"
   printf 'file\tbytes\ttokens\tprovenance\tbytes_per_token\n'
@@ -2494,6 +2546,8 @@ if [[ "$ACTION" == "tokinfo" ]]; then
   exit 0
 fi
 
+# v5.5+age: resolve the opt-in encryption switch (encode side only — decode
+# is driven by each artifact's own manifest cipher field, never by config).
 if [[ "$ACTION" == "encode" ]]; then
   encrypt_resolve
   if [[ "$ENC_ACTIVE" -eq 1 && "$TOK_MODE" -eq 1 ]]; then
@@ -2710,13 +2764,14 @@ encode_one() {
               info 'smash: media-fit: jpeg q=%s -> %sB payload (visually equivalent, NOT byte-identical)\n' \
                 "$FIT_Q" "$FIT_BYTES"
             else
-              warn "INFLATED: no JPEG quality fits under the source size - shipping the byte-lossless artifact instead"
+              info 'smash: INFLATED: no JPEG quality fits under the source size - shipping the byte-lossless artifact instead\n'
             fi
             ;;
           *) warn "--fit: not a raster image ($(sn "${mt:-unknown}")) - nothing to fit; artifact stays lossless" ;;
         esac
       else
-        warn "INFLATED: the smallest lossless artifact is $((cand_bytes + manifest_bytes))B against a ${src_bytes}B source. Printable-text armouring puts a floor under every artifact, so nothing smaller is possible for this input losslessly. It still restores byte-identical. For a raster image, --fit offers a deliberate quality trade."
+        info 'smash: INFLATED: the smallest lossless artifact is %sB against a %sB source. Printable-text armouring puts a floor under every artifact, so nothing smaller is possible for this input losslessly. It still restores byte-identical. For a raster image, --fit offers a deliberate quality trade.\n' \
+          "$((cand_bytes + manifest_bytes))" "$src_bytes"
       fi
     fi
   fi
@@ -2764,13 +2819,14 @@ encode_one() {
     info 'smash: total: %sB -> %sB artifact (%s%%)\n' \
       "$src_bytes" "$final_bytes" "$((final_bytes * 100 / src_bytes))"
   fi
-  # Every base64-emitting mode funnels through here, so the paste-cost truth is
-  # wired ONCE rather than at N call sites.
+  # Every base64-emitting mode (xz/gz/zstd/--ai/--ai-api/--encrypt/-s/--edit/
+  # stdin/dir) funnels through here, so the paste-cost truth is wired ONCE.
   paste_verdict "${src:-}" "$src_bytes" "$TMP_FINAL"
 
   move_final "$TMP_FINAL" "$final_out"
   TMP_FINAL=""
   info 'encoded: %s\n' "$(sn "$final_out")"
+  emit_path "$final_out"
 }
 
 # encode_path: stage one operand (file or directory) and encode it.
@@ -3005,7 +3061,7 @@ decode_one() {
     fi
     rm -f "$sp_pay"
   elif [[ "$manifest_encoding" == *"b85("* || "$manifest_encoding" == *"jxl("* ]]; then
-    # LEGACY 5.6/5.7 CHAIN. Artifacts from that line read
+    # LEGACY 5.6/5.7 CHAIN. Artifacts from the bernie line read
     #   # encoding: b85( xz( jxl( source ) ) )
     # They carry no sp-v1 marker, so they must NOT reach sp_invert: their
     # alphabet is handled by decode_payload and their jxl stage by djxl.
@@ -3068,10 +3124,13 @@ decode_one() {
     else
       info 'decoded+extracted: %s/%s\n' "$(sn "$extract_dir")" "$(sn "$extracted_name")"
     fi
+    emit_path "${extract_dir}/${extracted_name}"
   elif [[ "$is_ai" -eq 1 ]]; then
     info 'decoded (ai-compacted, lossy): %s\n' "$(sn "$out_path")"
+    emit_path "$out_path"
   else
     info 'decoded: %s\n' "$(sn "$out_path")"
+    emit_path "$out_path"
   fi
 }
 

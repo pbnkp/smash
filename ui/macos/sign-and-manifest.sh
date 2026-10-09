@@ -5,9 +5,7 @@
 # for signing. Notarization is a separate, documented step (see BUILD.md).
 set -euo pipefail
 APP="${1:-$HOME/Applications/Smash.app}"
-# Set SMASH_CODESIGN_ID to your own "Developer ID Application: NAME (TEAMID)"
-# to get a Developer ID signature. Unset = ad-hoc signing, reported honestly.
-CERT="${SMASH_CODESIGN_ID:-}"
+CERT="${SMASH_CODESIGN_IDENTITY:-}"
 IDENT="com.pbnkp.smash.menubar"
 [ -d "$APP" ] || { echo "no app at $APP"; exit 2; }
 
@@ -16,12 +14,12 @@ IDENT="com.pbnkp.smash.menubar"
 #    SHA manifest of every bundled resource. That is the real anti-tamper
 #    boundary; our external sidecar below is an auditable record, not a
 #    substitute (a self-hash cannot vouch for itself).
-if [ -n "$CERT" ] && security find-identity -v -p codesigning 2>/dev/null | grep -qF "$CERT"; then
+if [ -n "$CERT" ] && security find-identity -v -p codesigning 2>/dev/null | grep -F -q "$CERT"; then
   codesign --force --options runtime --sign "$CERT" --identifier "$IDENT" "$APP"
   MODE="Developer ID"
 else
   codesign --force --sign - --identifier "$IDENT" "$APP"
-  MODE="ad-hoc (no SMASH_CODESIGN_ID set, or that cert is absent)"
+  MODE="ad-hoc (no Developer ID cert in keychain)"
 fi
 
 # 2. external sidecar manifest computed on the SIGNED bundle (does not alter the

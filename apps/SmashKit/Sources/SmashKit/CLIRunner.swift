@@ -17,7 +17,7 @@ public struct SmashCLI: Sendable {
         public var description: String {
             switch self {
             case .notInstalled:
-                return "The smash command-line tool was not found. Install it with: brew install pbnkp/smash/smash"
+                return "smash v6 was not found. The Mac app uses ~/bin/smash (v6.1)."
             case .failed(let status, let stderr):
                 let msg = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                 return msg.isEmpty ? "smash exited with status \(status)." : msg
@@ -27,8 +27,9 @@ public struct SmashCLI: Sendable {
 
     public var executable: URL
 
-    /// Locate the CLI. PATH is not inherited by a GUI app launched from
-    /// Finder, so the usual install locations are probed explicitly.
+    /// Locate smash v6. A GUI app does not inherit a terminal PATH, so the
+    /// usual install locations are probed. The newest v6 wins. Older smash
+    /// is ignored: the windowed app is built for the v6 artifact format.
     public static func locate() -> SmashCLI? {
         let candidates = [
             "\(NSHomeDirectory())/bin/smash",
@@ -36,10 +37,35 @@ public struct SmashCLI: Sendable {
             "/opt/homebrew/bin/smash",
             "/usr/local/bin/smash",
         ]
+        var best: (cli: SmashCLI, parts: [Int])?
         for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
-            return SmashCLI(executable: URL(fileURLWithPath: path))
+            let cli = SmashCLI(executable: URL(fileURLWithPath: path))
+            guard let parts = v6Parts(cli.version()) else { continue }
+            if best == nil || isNewer(parts, than: best!.parts) {
+                best = (cli, parts)
+            }
         }
-        return nil
+        return best?.cli
+    }
+
+    /// "smash v6.1" -> [6, 1]. Anything that is not v6 is nil.
+    static func v6Parts(_ version: String?) -> [Int]? {
+        guard let version else { return nil }
+        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let token = trimmed.split(separator: " ").last, token.hasPrefix("v6") else { return nil }
+        let nums = token.dropFirst().split(separator: ".").compactMap { Int($0) }
+        guard nums.first == 6 else { return nil }
+        return nums
+    }
+
+    private static func isNewer(_ a: [Int], than b: [Int]) -> Bool {
+        let n = max(a.count, b.count)
+        for i in 0..<n {
+            let av = i < a.count ? a[i] : 0
+            let bv = i < b.count ? b[i] : 0
+            if av != bv { return av > bv }
+        }
+        return false
     }
 
     public struct Result: Sendable {

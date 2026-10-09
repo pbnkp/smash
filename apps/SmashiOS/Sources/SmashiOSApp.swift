@@ -37,6 +37,8 @@ struct ArtifactView: View {
                 }
             }
             .navigationTitle("Smash")
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .preferredColorScheme(.dark)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Open") { importing = true }
@@ -51,13 +53,25 @@ struct ArtifactView: View {
     }
 
     private var empty: some View {
-        ContentUnavailableView {
-            Label("No artifact open", systemImage: "shippingbox")
-        } description: {
-            Text("Open a .smash.txt file to inspect what it contains and where it came from.")
-        } actions: {
-            Button("Open Artifact") { importing = true }.buttonStyle(.borderedProminent)
+        VStack(alignment: .leading, spacing: 18) {
+            SmashPlay()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Open a portable artifact")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("This phone restores the gzip chain and checks it against the sha256 in the file. Every other chain still shows where it came from, and names the chain it cannot invert.")
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Open Artifact") { importing = true }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(Color(red: 0.22, green: 0.74, blue: 0.97))
         }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.black)
     }
 
     private func handle(_ result: Result<[URL], Error>) {

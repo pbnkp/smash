@@ -182,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let b = status.button {
-            b.image = AppDelegate.barIcon()
+            b.image = NSImage(systemSymbolName: "archivebox.fill", accessibilityDescription: "smash")
             b.action = #selector(togglePopover)
             b.target = self
             let dv = DropView(frame: b.bounds)
@@ -197,26 +197,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if CommandLine.arguments.contains("--show") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.showPopover() }
         }
-    }
-
-    /// The menu-bar glyph. Prefers the bundled template image (Resources/menubar.png
-    /// plus its @2x), which macOS tints for light/dark menu bars and for the
-    /// highlighted state. Falls back to an SF Symbol when the resource is absent,
-    /// so a hand-built bundle still shows something rather than a blank square.
-    static func barIcon() -> NSImage? {
-        if let img = NSImage(named: "menubar") ?? bundledBarImage() {
-            img.isTemplate = true
-            img.size = NSSize(width: 16, height: 16)
-            return img
-        }
-        return NSImage(systemSymbolName: "arrow.down.to.line.compact",
-                       accessibilityDescription: "smash")
-            ?? NSImage(systemSymbolName: "archivebox.fill", accessibilityDescription: "smash")
-    }
-
-    private static func bundledBarImage() -> NSImage? {
-        guard let u = Bundle.main.url(forResource: "menubar", withExtension: "png") else { return nil }
-        return NSImage(contentsOf: u)
     }
 
     @objc func togglePopover() {
@@ -240,7 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if let b = self.status.button {
                     b.image = NSImage(systemSymbolName: okAll ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-                        b.image = AppDelegate.barIcon()
+                        b.image = NSImage(systemSymbolName: "archivebox.fill", accessibilityDescription: "smash")
                     }
                 }
             }

@@ -3,18 +3,21 @@
 Every deploy in this project is reversible. Timestamped backups are made before
 any overwrite.
 
-## CLI
-smash writes a timestamped backup beside the binary before it overwrites itself,
-so every upgrade is reversible on any host:
+## CLI (per host)
+Each host keeps a timestamped backup beside the binary when it was upgraded:
 ```
-ls ~/bin/smash.v-prev.*.bak            # or wherever `command -v smash` points
-cp ~/bin/smash.v-prev.<timestamp>.bak ~/bin/smash
+# macOS hosts
+ls ~/bin/smash.v-prev.*.bak ~/bin/_archive/smash-v4.5-*      # find the backup
+cp ~/bin/smash.v-prev.<ts>.bak ~/bin/smash                    # restore
 smash -V
+
+# FreeBSD host
+cp /root/bin/smash.v-prev.<ts>.bak /root/bin/smash
 ```
-On a system-wide install the same pattern applies next to the installed binary
-(for example `/usr/local/bin/smash.v-prev.<timestamp>.bak`). Use
-`command -v smash` to find which copy is actually on your PATH before restoring —
-a second copy earlier in PATH will shadow the one you just rolled back.
+Known-good backups from this work:
+- Mac:          `~/bin/smash.v-prev.<ts>.bak` (pre-v5 shadowing copy)
+- FreeBSD host: `/root/bin/smash.v-prev.<ts>.bak` (v4.5)
+- Mac archives: `~/bin/_archive/smash-v4.5-20260710`, `smash-v4.x-home-copy-apr27`
 
 ## Homebrew
 ```
@@ -58,8 +61,8 @@ Because the SW **fails closed** on integrity mismatch, a corrupt redeploy never
 activates — clients keep the last verified version.
 
 ## Repository / GitHub
-- Every release is tagged, so any prior tree is recoverable with
-  `git checkout <tag>`; the tap's history retains each formula version.
+- Pre-change repo state is archived at
+  `scratchpad/_backups/smash-repo.<ts>.tgz` and the tap/main history is intact.
 - The CLI `smash` script is **byte-identical** to the shipped v5.0 (sha
   `98089bdd…af90`); this work added `ui/`, `mcp/`, and docs only, so the
   Homebrew formula sha is unchanged and needs no bump.

@@ -16,7 +16,7 @@
 //	                             unless -allow-remote AND TLS are supplied.
 //
 // Go 1.13-compatible: uses io/ioutil, no generics, no post-1.13 stdlib APIs.
-// Target parity with Go 1.13.7, the oldest supported build target.
+// Target parity with the FreeBSD host's Go 1.13.7.
 package main
 
 import (

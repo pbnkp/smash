@@ -8,7 +8,7 @@ CLI's runtime `xz`.
 The CLI is a single Bash script — nothing to build. Lint + smoke:
 ```
 bash -n smash            # syntax (bash 3.2-safe)
-./smash -V               # -> smash v5.0
+./smash -V               # -> smash v6.0
 ```
 Runtime deps: `openssl`, `xz`, `gzip` (all present on macOS/FreeBSD); `zstd`
 only for `-z`; `jq`+`curl` only for `--ai-api`.
@@ -20,7 +20,7 @@ post-1.13 stdlib). Builds on any Go ≥ 1.13.
 cd mcp/smash-mcp
 go vet ./...
 go build -trimpath -ldflags="-s -w" -o smash-mcp .
-./smash-mcp -V           # -> smash-mcp v1.1 (proto 2025-06-18)
+./smash-mcp -V           # -> smash-mcp v1.3 (proto 2025-06-18)
 ```
 - **Verified:** vet clean + build on go1.26 (macOS arm64) and go1.22.12
   (FreeBSD amd64). Language-level 1.13 compatibility is by construction
@@ -48,10 +48,10 @@ cd ui/macos
 ```
 - Compiles `smash-menubar.swift` with `swiftc -O`, bundles `Smash.app`
   (`LSUIElement` menu-bar app), and code-signs it.
-- **Signing status (honest):** the script uses the Developer ID cert
-  the identity named by `$SMASH_CODESIGN_ID` when that is set and present in the keychain; in an
-  environment without it (e.g. CI/headless) it falls back to **ad-hoc**
-  signing and says so. The build in this session is **ad-hoc signed**.
+- **Signing status (honest):** set `SMASH_CODESIGN_IDENTITY` to the
+  exact certificate name to sign for distribution. With it unset, or when
+  that certificate is not in the keychain, the script falls back to
+  **ad-hoc** signing and says so.
 - **Notarization: NOT performed.** Distributing outside your own machines
   requires `xcrun notarytool submit` + stapling with an Apple Developer
   account; that step is not automated here.

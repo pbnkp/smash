@@ -10,7 +10,7 @@
 ```
 brew tap pbnkp/smash
 brew install smash
-smash -V            # -> smash v5.0
+smash -V            # -> smash v6.0
 ```
 Or in one line: `brew install pbnkp/smash/smash`.
 
@@ -48,7 +48,7 @@ claude mcp add -s user smash ~/bin/smash-mcp
 { "mcpServers": { "smash": { "command": "/Users/you/bin/smash-mcp" } } }
 ```
 Verify: ask the client to call `smash_capabilities` — it returns
-`smash v5.0`. Optional local HTTP transport:
+`smash v6.0`. Optional local HTTP transport:
 `smash-mcp -http 127.0.0.1:7461` (bearer token printed to stderr).
 
 ## macOS app

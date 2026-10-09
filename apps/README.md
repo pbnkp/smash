@@ -46,6 +46,11 @@ defeat the reason they asked.
     cd SmashiOS && xcodegen generate && \
       xcodebuild -scheme SmashiOS -sdk iphonesimulator build
 
+Both apps are version 6.1.1. They share `SmashPlay.swift`. The iOS target
+restores only the gzip chain and says so. App Store Connect upload is a
+separate step and needs the AuthKey on this Mac. A local build is not a
+store release.
+
 Fixtures under `SmashKit/Tests/SmashKitTests/Fixtures` are real artifacts
 produced by the CLI, not hand-written samples. If the artifact format changes,
 the tests fail. That is intended.

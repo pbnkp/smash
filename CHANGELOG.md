@@ -7,8 +7,35 @@ All notable changes to smash are documented here.
 ## v6.0 — 2026-09-08 (CLI + apps + MCP) — "one version, and it proves its choices"
 
 Four lines had diverged with no superset among them: `main` 5.6 (jxl + b85),
-an unpushed 5.7 line running on a FreeBSD host (jxl + b85 + redact), a local 5.5+age line
+an unpushed 5.7 running on the FreeBSD host (jxl + b85 + redact), a local 5.5+age line
 (age + `--tok`), and a dt/superposition line. v6.0 is the union.
+
+### Release 6.0 tag — 2026-09-13
+The 6.0 code had been on `main` since 09-08 with no tag and no release assets.
+Cutting the tag surfaced five defects; they are fixed here and are what the
+tagged build ships:
+- `--help` still announced v5.3 (the Homebrew formula's test asserts the
+  version in `--help`). The usage banner now prints `$VERSION`.
+- The manifest `host:` line recorded the machine's full hostname. On a home
+  machine that is usually the ISP's reverse-DNS of the public IP (address and
+  city), and artifacts get shared. It now records only the short local machine
+  name; `SMASH_HOST=name` overrides it and `SMASH_HOST=-` records nothing.
+- The committed Finder Quick Actions hardcoded one machine's absolute path to
+  the CLI. They and the installer now resolve `smash` from `PATH`.
+- The macOS app scripts sign with `SMASH_CODESIGN_IDENTITY` when that
+  certificate is in the keychain, and otherwise fall back to ad-hoc signing
+  with a note. The release apps are ad-hoc signed and not notarized:
+  right-click → Open on first launch.
+- The Homebrew formula's source URL pointed at `main` with a pinned sha256, so
+  every push to `main` broke `brew install`. It now pins the `6.0` tag.
+
+Release assets: `smash` (CLI, sha256 in `SHA256SUMS`), `install.sh`,
+`smash-mcp` v1.3 for macOS (arm64, x86_64), FreeBSD amd64 and Linux (amd64,
+arm64), `Smash.app` (SwiftUI, macOS 14+), `Smash-menubar.app` (macOS 13+),
+the web app as a single file and as the offline `dist/` bundle. The FreeBSD
+and Linux MCP binaries are cross-compiled with go1.27 and were not
+runtime-tested in this release; the CLI itself is a Bash script and needs no
+build on any platform.
 
 ### Added
 - **Superposition engine.** Builds every viable chain over
@@ -59,16 +86,15 @@ an unpushed 5.7 line running on a FreeBSD host (jxl + b85 + redact), a local 5.5
   a sha256 mismatch is correct.
 - **MCP `smash_manifest` validated base64 only**, so a base85 artifact came back
   as a false integrity failure. It now detects the alphabet from the manifest.
-- **A downstream wrapper globbed `*.b64.*`**, a pre-v5 artifact name, so its
-  subcommands had been dead since v5.0. Artifacts have ended in `.txt` with a
-  `# ` manifest since v5.0; match on the manifest, not on a legacy suffix.
+- **`.claude/helpers/boy-smash.sh` globbed `*.b64.*`**, a pre-v5 name, so its
+  `read`/`context`/`memory` subcommands had been dead since v5.0.
 
 ### Notes
 - Artifacts on a non-legacy chain need a v6.0 decoder. Older smash fails loudly
   ("File format not recognized") rather than corrupting. Inputs that gain
   nothing hand back to the legacy path and stay byte-identical and readable by
   older builds.
-- Hosts without python3 cannot run base85 or the `tsv1` transform.
+- The FreeBSD 12.1 host has no python3, so base85 and the `tsv1` transform cannot run there.
 
 ---
 
@@ -372,7 +398,7 @@ The "many things in, one safe text file out" release.
   (Claude 4 Sonnet API model ID, correct as of 2026-05-07)
 
 ### Added
-- AI-workflow wrapper integration documented in README  
+- `boy-smash.sh` AI workflow integration documented in README  
   (read / pack / context / memory / decode subcommands for AI session use)
 
 ---

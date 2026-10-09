@@ -6,9 +6,9 @@ never runs a shell: it calls typed tools, and the server shells out to the
 canonical `smash` binary with **argv** (never a shell string), returning
 artifact **paths + metadata** — never raw content.
 
-- Version: `smash-mcp v1.1`
+- Version: `smash-mcp v1.3`
 - MCP protocol: `2025-06-18`
-- Engine: the `smash` CLI (v5.3) is the single source of truth. The server
+- Engine: the `smash` CLI (v6.0) is the single source of truth. The server
   produces byte-identical artifacts to the CLI because it *is* the CLI.
 - Language: Go, written to the **Go 1.13** language level (`io/ioutil`, no
   generics, no post-1.13 stdlib). Builds clean on go1.22 (macOS arm64 +
@@ -142,4 +142,4 @@ than content dumps.
   method → -32601, unknown tool → isError, duplicate id both answered,
   notification-only stays silent, no content dumps in the protocol channel.
 - In-client: `smash_probe`/`smash_capabilities` answered live through Claude
-  Code's own MCP client against `smash v5.3`.
+  Code's own MCP client against `smash v6.0`.
