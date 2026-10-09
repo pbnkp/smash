@@ -24,14 +24,22 @@ struct Inspection {
 
 struct ArtifactView: View {
     @State private var importing = false
+    @State private var showSettings = false
     @State private var inspection: Inspection?
     @State private var filename: String?
+    @AppStorage("smash.ios.showFullSHA") private var showFullSHA = false
+    @AppStorage("smash.ios.keepRestored") private var keepRestored = true
 
     var body: some View {
         NavigationStack {
             Group {
                 if let inspection {
-                    ArtifactDetail(inspection: inspection, filename: filename ?? "artifact")
+                    ArtifactDetail(
+                        inspection: inspection,
+                        filename: filename ?? "artifact",
+                        showFullSHA: showFullSHA,
+                        keepRestored: keepRestored
+                    )
                 } else {
                     empty
                 }
@@ -40,9 +48,31 @@ struct ArtifactView: View {
             .toolbarBackground(Color.black, for: .navigationBar)
             .preferredColorScheme(.dark)
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    if inspection != nil {
+                        Button("Close") {
+                            inspection = nil
+                            filename = nil
+                        }
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Open") { importing = true }
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Settings")
+                }
+            }
+            .sheet(isPresented: $showSettings) {
+                PhoneSettings(showFullSHA: $showFullSHA, keepRestored: $keepRestored)
+            }
+            .onOpenURL { url in
+                handle(.success([url]))
             }
             .fileImporter(isPresented: $importing,
                           allowedContentTypes: [.plainText, .text, .data],
@@ -113,6 +143,48 @@ struct ArtifactView: View {
             return Inspection(manifest: manifest, chain: chain, restored: bytes, digestMatches: matches)
         } catch {
             return Inspection(manifest: manifest, chain: chain, error: String(describing: error))
+        }
+    }
+}
+
+struct PhoneSettings: View {
+    @Binding var showFullSHA: Bool
+    @Binding var keepRestored: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("This iPhone restores the gzip chain and checks the sha256 in the file. Every other chain still shows where it came from.")
+                } header: {
+                    Text("Restore")
+                }
+
+                Section {
+                    Toggle("Show the full checksum", isOn: $showFullSHA)
+                    Toggle("Keep restored files on this iPhone", isOn: $keepRestored)
+                    Text("Kept files stay in Smash’s folder in the Files app. Sharing still asks you each time.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("On this iPhone")
+                }
+
+                Section {
+                    LabeledContent("Version", value: "6.1")
+                    LabeledContent("Engine", value: "SmashKit")
+                } header: {
+                    Text("About")
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
     }
 }

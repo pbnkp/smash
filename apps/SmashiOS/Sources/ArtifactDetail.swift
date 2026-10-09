@@ -5,6 +5,9 @@ import UniformTypeIdentifiers
 struct ArtifactDetail: View {
     let inspection: Inspection
     let filename: String
+    var showFullSHA: Bool = false
+    var keepRestored: Bool = true
+    @State private var keptName: String?
 
     private var m: SmashManifest { inspection.manifest }
 
@@ -52,7 +55,7 @@ struct ArtifactDetail: View {
 
             if let sha = m.sourceSHA256 {
                 Section("Integrity") {
-                    row("Source sha256", String(sha.prefix(24)) + "…")
+                    row("Source sha256", showFullSHA ? sha : String(sha.prefix(16)) + "…")
                     if let matches = inspection.digestMatches {
                         Label(
                             matches ? "Restored bytes match the recorded sha256."
@@ -72,8 +75,12 @@ struct ArtifactDetail: View {
                     if let preview = String(data: data.prefix(4096), encoding: .utf8), !preview.isEmpty {
                         NavigationLink("Preview contents") { TextPreview(text: preview) }
                     }
-                    ShareLink(item: SavedFile(data: data, name: m.source ?? "restored"),
-                              preview: SharePreview(m.source ?? "restored")) {
+                    if let keptName {
+                        Label("Kept on this iPhone as \(keptName).", systemImage: "folder")
+                            .font(.caption)
+                    }
+                    ShareLink(item: SavedFile(data: data, name: safeName),
+                              preview: SharePreview(safeName)) {
                         Label("Save or Share restored file", systemImage: "square.and.arrow.up")
                     }
                 } else if let blocker = inspection.chain?.nativeDecodeBlocker {
@@ -83,6 +90,29 @@ struct ArtifactDetail: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+        }
+        .onAppear(perform: keepIfNeeded)
+    }
+
+    private var safeName: String {
+        let raw = m.source ?? "restored"
+        let cleaned = raw.split(separator: "/").last.map(String.init) ?? "restored"
+        if cleaned == "." || cleaned == ".." || cleaned.isEmpty { return "restored" }
+        return cleaned
+    }
+
+    private func keepIfNeeded() {
+        guard keepRestored, let data = inspection.restored, keptName == nil else { return }
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        guard let dir = base?.appendingPathComponent("Restored", isDirectory: true) else { return }
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent(safeName)
+            try data.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            keptName = safeName
+        } catch {
+            keptName = nil
         }
     }
 

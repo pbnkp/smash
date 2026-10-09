@@ -74,8 +74,11 @@ public struct SmashCLI: Sendable {
     }
 
     /// Run smash with the given arguments in `workingDirectory`.
+    /// `environment` is merged over the inherited environment. Callers that
+    /// pass `-q` also pass `SMASH_PRINT_PATH=1`, because quiet mode prints
+    /// nothing unless that variable is set.
     @discardableResult
-    public func run(_ arguments: [String], in workingDirectory: URL) throws -> Result {
+    public func run(_ arguments: [String], in workingDirectory: URL, environment extra: [String: String] = [:]) throws -> Result {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
@@ -85,8 +88,9 @@ public struct SmashCLI: Sendable {
         // without it the engine silently loses candidate chains and produces
         // larger artifacts than the CLI would in a terminal.
         var env = ProcessInfo.processInfo.environment
-        let extra = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        env["PATH"] = env["PATH"].map { "\(extra):\($0)" } ?? extra
+        let pathExtra = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        env["PATH"] = env["PATH"].map { "\(pathExtra):\($0)" } ?? pathExtra
+        for (key, value) in extra { env[key] = value }
         process.environment = env
 
         let errPipe = Pipe(), outPipe = Pipe()
@@ -104,12 +108,18 @@ public struct SmashCLI: Sendable {
             throw Failure.failed(status: process.terminationStatus, stderr: stderr)
         }
 
-        // smash announces each result as "encoded: <path>" / "decoded: <path>".
+        // Older builds announced "encoded: <path>". Quiet mode with
+        // SMASH_PRINT_PATH=1 prints one absolute path per line and nothing else.
         var produced: [URL] = []
         for line in (stderr + "\n" + stdout).split(separator: "\n") {
-            for prefix in ["encoded: ", "decoded: "] where line.hasPrefix(prefix) {
-                let p = String(line.dropFirst(prefix.count))
+            let raw = String(line).trimmingCharacters(in: .whitespaces)
+            if raw.isEmpty { continue }
+            for prefix in ["encoded: ", "decoded: "] where raw.hasPrefix(prefix) {
+                let p = String(raw.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
                 produced.append(URL(fileURLWithPath: p, relativeTo: workingDirectory).standardizedFileURL)
+            }
+            if raw.hasPrefix("/") {
+                produced.append(URL(fileURLWithPath: raw).standardizedFileURL)
             }
         }
         return Result(outputPaths: produced, log: stderr + stdout)

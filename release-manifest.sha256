@@ -8,7 +8,7 @@ c6ac5a02151babda9281799d2634102a9f6520328351f1a07e7149bb4da94cd5  ./README.md
 a5b984983c19c309738ea40a3bdf05b5f0effb526db972deadba5581e5132a31  ./THREAT-MODEL.md
 5f64d4dbc85fbeff0d51aeeb33f5116539530b728f9c2b4fd7bf33cc83a5e6aa  ./apps/README.md
 ac18d2bccd58baf31c7819ed049c9caec7d4ae4c89ce9adae6dc3a376e4d8001  ./apps/SmashKit/Package.swift
-ddebec785d42ac30ed2eff0c93a12e31bc0fea49ec1a44aac4ca463f276e7ad1  ./apps/SmashKit/Sources/SmashKit/CLIRunner.swift
+000aa0f0415354d494581ef4e866ae3ca6b0b8de51831f9d7d3eeb462f373590  ./apps/SmashKit/Sources/SmashKit/CLIRunner.swift
 8ded324a178ba0b5dc2421aa46df63fe1dfcb5803710cc39f359bb94308ceb96  ./apps/SmashKit/Sources/SmashKit/Chain.swift
 e05689296fdfd61d1703b533ac7c1312380557e93126ccf7388882cb481f9451  ./apps/SmashKit/Sources/SmashKit/Digest.swift
 45e8fe0b50f49877e5124828a9e305a2ec720ebab6632973adb08c4378fd054a  ./apps/SmashKit/Sources/SmashKit/Manifest.swift
@@ -23,12 +23,12 @@ f9720e031a77946b5c012839e44da9e912fb9ba97023a3540f7a80232d1aba19  ./apps/SmashKi
 2e89e8b614a397cd3c4a7cab50a3ed0b9253cdedce7c5be3cc03ee806dc57850  ./apps/SmashKit/Tests/SmashKitTests/Fixtures/zstd-chain.smash.txt
 9573abc25dedcb86c27b878ff5f782f70b9942ea09c60ca07c7c7193af8d2fbb  ./apps/SmashKit/Tests/SmashKitTests/SmashKitTests.swift
 07833dabea35ad3eb644422dccdcf539f5f5b60c4f080a9a450dfddaf7151ba8  ./apps/SmashMac/Package.swift
-8dd9adca651e4bff7108ea86b4503df0469eae519a8fa88e8225962b2019a5f3  ./apps/SmashMac/Sources/SmashMac/App.swift
-695edffed55a6927e4905a42e232ddf7a6017d8def54052bac1bf5529964819d  ./apps/SmashMac/Sources/SmashMac/Model.swift
+771e751f1ff8e74388feffdcdefc5cffd96314b229c5311e3a63267e0c187d58  ./apps/SmashMac/Sources/SmashMac/App.swift
+8f8c0ba1ddbd44f471c24688e889d066ed297fb1bbcdba2c9940feb4991d796f  ./apps/SmashMac/Sources/SmashMac/Model.swift
 8128762ae4cde924e2e50a17f55876a3f9380713501bddd9bbac5c6314094d41  ./apps/SmashMac/build-app.sh
-1b7178b70209fff0debd22817b9878281b0a4f683541f9e43624e6be5c9c9d9b  ./apps/SmashiOS/Sources/ArtifactDetail.swift
-c2b8d71192085b3466642d817325456d2a7e7329a01aefbe973146a53f00362f  ./apps/SmashiOS/Sources/SmashiOSApp.swift
-3e4d7e2eef211d8fd149cbd3b36edf685de72d00c6ef1fb53b3aa322a53c7ae2  ./apps/SmashiOS/project.yml
+31cc59f5273e31aaa80251ebc71e83b1157155aeb4cb593b188480771d9e7111  ./apps/SmashiOS/Sources/ArtifactDetail.swift
+66c8dcc8d8e521b1b3a754cc5b1ff2ad7700d01c23b3128a7bf5e5b5cb064e51  ./apps/SmashiOS/Sources/SmashiOSApp.swift
+f0468f1a919ab1bdbed5bbbe977ec0db63a42a96eed1c2dc8e5a163ffc4affd5  ./apps/SmashiOS/project.yml
 7ccd57d788e06514233390e8fd37439d367677b04d3e3f5c49bd758eca604ef9  ./install.sh
 81f5d1ba42e05a43b36c00027323dab9f83b92c0518027adc949d8a63ba0e30f  ./logo.svg
 11ffcbab610ae90abf775d3fd2280d71b1a9d55ee9fdf33e9c27b6fdea7f18ef  ./mcp/PROTOCOL.md
